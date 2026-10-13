@@ -21,7 +21,7 @@ Requirements: [uv](https://docs.astral.sh/uv/) and Node 20+.
 ```bash
 # backend → http://127.0.0.1:8600
 cd backend
-echo LCC_ADMIN_PASSWORD=admin > .env      # optional; otherwise a random password is written to backend/data/
+cp .env.example .env      # then edit it (works in PowerShell too; avoid `echo > .env`, which writes UTF-16 there)
 uv run uvicorn app.main:app --port 8600 --reload
 ```
 
@@ -32,7 +32,7 @@ npm install
 npm run dev
 ```
 
-Sign in as `admin`. On a fresh database, two **simulated** servers plus sample jobs and transfers are seeded so the UI has data immediately. Set `LCC_DEMO_MODE=false` to turn this off.
+Sign in as `admin` with `LCC_ADMIN_PASSWORD` (if unset, a random password is written to `backend/data/`). With `LCC_DEMO_MODE=true`, a fresh database is seeded with two **simulated** servers plus sample jobs and transfers.
 
 ## Adding a real server
 
