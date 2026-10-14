@@ -180,6 +180,58 @@
   animation: var(--animate-shimmer);
 }
 
+/* ------------------------------------------------------------------ server pets (server-pet.tsx) */
+
+@layer components {
+  .pet * {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  .pet .pet-body { transform-origin: 50% 100%; animation: pet-bob 3.2s ease-in-out infinite; }
+  .pet-sleep .pet-body { animation: pet-breathe 4s ease-in-out infinite; }
+  .pet-busy .pet-body { animation-duration: 0.9s; }
+  .pet-hot .pet-body { animation: pet-pant 0.6s ease-in-out infinite; }
+  .pet-ko .pet-body { animation: none; transform: rotate(-10deg) translateY(2px); }
+  .pet-connecting .pet-body { animation: pet-breathe 2.4s ease-in-out infinite; opacity: 0.7; }
+
+  .pet .pet-eyes { animation: pet-blink 4.5s infinite; }
+  .pet-busy .pet-eyes { animation-duration: 2.8s; }
+  .pet-idle .pet-led { animation: pet-glow 2.4s ease-in-out infinite; }
+  .pet-busy .pet-led { animation: pet-glow 0.7s ease-in-out infinite; }
+  .pet-hot .pet-led { animation: pet-glow 0.35s ease-in-out infinite; }
+
+  .pet .pet-z { opacity: 0; animation: pet-z 3s ease-out infinite; }
+  .pet .pet-z2 { animation-delay: 1.5s; }
+  .pet .pet-sweat { animation: pet-sweat 1.6s ease-in infinite; }
+  .pet .pet-steam { animation: pet-steam 1.4s ease-out infinite; }
+  .pet .pet-steam2 { animation-delay: 0.7s; }
+  .pet .pet-tongue { animation: pet-tongue 0.6s ease-in-out infinite; transform-origin: 50% 0; }
+  .pet .pet-stars { transform-origin: 26px 12px; transform-box: view-box; animation: pet-orbit 2.2s linear infinite; }
+
+  @keyframes pet-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+  @keyframes pet-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.03, 0.96); } }
+  @keyframes pet-pant { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.04, 0.95); } }
+  @keyframes pet-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+  @keyframes pet-glow { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes pet-z {
+    0% { opacity: 0; transform: translate(0, 0) scale(0.6); }
+    20% { opacity: 0.9; }
+    100% { opacity: 0; transform: translate(6px, -10px) scale(1.1); }
+  }
+  @keyframes pet-sweat {
+    0% { opacity: 0; transform: translateY(-2px); }
+    25% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(9px); }
+  }
+  @keyframes pet-steam {
+    0% { opacity: 0; transform: translateY(3px); }
+    40% { opacity: 0.9; }
+    100% { opacity: 0; transform: translateY(-5px); }
+  }
+  @keyframes pet-tongue { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(1.25); } }
+  @keyframes pet-orbit { to { transform: rotate(360deg); } }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -10,7 +10,6 @@ import {
   Plug,
   Power,
   RotateCw,
-  Server as ServerIcon,
   Square,
   SquareTerminal,
   Terminal,
@@ -36,6 +35,7 @@ import { copyToClipboard } from "@/lib/utils";
 import { PowerDialog } from "./power-dialog";
 import { ServerFormDialog } from "./server-form-dialog";
 import { ServerMetricsGrid } from "./server-metrics-grid";
+import { ServerPet } from "./server-pet";
 import { StatusBadge, StatusDot } from "./status-badge";
 
 export function sshCommand(s: Server): string {
@@ -71,9 +71,7 @@ export function ServerCard({ server }: { server: Server }) {
     <section className="glass flex min-w-0 flex-col rounded-[24px] p-5 animate-fade-in 3xl:p-6" aria-label={server.name}>
       {/* Header */}
       <div className="flex items-start gap-4">
-        <div className="grid size-[52px] shrink-0 place-items-center rounded-2xl bg-gradient-to-b from-white to-slate-100 text-slate-600 shadow-tile ring-1 ring-black/[0.04] dark:from-slate-700 dark:to-slate-800 dark:text-slate-300">
-          <ServerIcon className="size-6" strokeWidth={1.7} />
-        </div>
+        <ServerPet live={live} seed={server.name} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2.5">
             <h2 className="truncate text-[21px] font-semibold tracking-[-0.02em]">{server.name}</h2>
