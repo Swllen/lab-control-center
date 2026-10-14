@@ -22,7 +22,14 @@ export interface PaneState {
   /** Alternate login account (~/.ssh/config alias); absent/null = the server's own login. */
   account?: string | null;
   username?: string | null;
+  /** Runs inside tmux, so the shell survives backend restarts (absent = plain login shell). */
+  tmux?: boolean;
+  /** tmux session to (re)attach to; assigned by the backend (lcc-<id>) on first create. */
+  tmuxSession?: string | null;
 }
+
+/** false = plain shell, true = new tmux session, string = attach to that tmux session. */
+export type TmuxChoice = boolean | string;
 
 export interface PaneAccount {
   account: string;
@@ -128,6 +135,18 @@ function resizeSlots(slots: (string | null)[], count: number): (string | null)[]
   return Array.from({ length: count }, (_, i) => slots[i] ?? null);
 }
 
+function newPane(w: Workspace, paneId: string, serverId: number, name: string | undefined, login: PaneAccount | null | undefined, tmux: TmuxChoice): PaneState {
+  return {
+    id: paneId,
+    serverId,
+    name: name ?? nextSessionName(w, serverId, login?.username ?? (tmux ? "tmux" : "shell")),
+    sessionId: null,
+    account: login?.account ?? null,
+    username: login?.username ?? null,
+    ...(tmux ? { tmux: true, tmuxSession: typeof tmux === "string" ? tmux : null } : {}),
+  };
+}
+
 export function nextSessionName(w: Workspace, serverId: number, base = "shell"): string {
   const taken = new Set(Object.values(w.panes).filter((p) => p.serverId === serverId).map((p) => p.name));
   for (let i = 1; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
@@ -137,17 +156,10 @@ export function nextSessionName(w: Workspace, serverId: number, base = "shell"):
 
 export const workspace = {
   /** Place a new pane in the active tab: first free slot, else grow the layout, else a new tab. */
-  openPane(serverId: number, name?: string, tabId?: string, login?: PaneAccount | null): string {
+  openPane(serverId: number, name?: string, tabId?: string, login?: PaneAccount | null, tmux: TmuxChoice = false): string {
     const paneId = uid();
     update((w) => {
-      const pane: PaneState = {
-        id: paneId,
-        serverId,
-        name: name ?? nextSessionName(w, serverId, login?.username ?? "shell"),
-        sessionId: null,
-        account: login?.account ?? null,
-        username: login?.username ?? null,
-      };
+      const pane = newPane(w, paneId, serverId, name, login, tmux);
       let tab = w.tabs.find((t) => t.id === (tabId ?? w.activeTabId)) ?? w.tabs[0]!;
       let tabs = w.tabs;
       let free = tab.slots.indexOf(null);
@@ -171,21 +183,14 @@ export const workspace = {
   },
 
   /** Open a pane in a specific empty slot. */
-  openInSlot(tabId: string, slot: number, serverId: number, login?: PaneAccount | null): string {
+  openInSlot(tabId: string, slot: number, serverId: number, login?: PaneAccount | null, tmux: TmuxChoice = false): string {
     const paneId = uid();
     update((w) => {
       const tab = w.tabs.find((t) => t.id === tabId);
       if (!tab || tab.slots[slot] !== null) return w;
       const slots = [...tab.slots];
       slots[slot] = paneId;
-      const pane: PaneState = {
-        id: paneId,
-        serverId,
-        name: nextSessionName(w, serverId, login?.username ?? "shell"),
-        sessionId: null,
-        account: login?.account ?? null,
-        username: login?.username ?? null,
-      };
+      const pane = newPane(w, paneId, serverId, undefined, login, tmux);
       return { ...replaceTab(w, { ...tab, slots }), panes: { ...w.panes, [paneId]: pane }, focusedPaneId: paneId };
     });
     return paneId;
@@ -197,7 +202,8 @@ export const workspace = {
     const tab = w.tabs.find((t) => t.slots.includes(paneId));
     if (!pane || !tab) return null;
     const login = pane.account ? { account: pane.account, username: pane.username ?? null } : null;
-    return workspace.openPane(pane.serverId, nextSessionName(w, pane.serverId, pane.name.replace(/-\d+$/, "")), tab.id, login);
+    // A duplicate gets its own tmux session; attaching twice to one would mirror the same screen.
+    return workspace.openPane(pane.serverId, nextSessionName(w, pane.serverId, pane.name.replace(/-\d+$/, "")), tab.id, login, !!pane.tmux);
   },
 
   closePane(paneId: string): void {
@@ -216,8 +222,14 @@ export const workspace = {
     if (current().focusedPaneId !== paneId) update((w) => ({ ...w, focusedPaneId: paneId }));
   },
 
-  setSession(paneId: string, sessionId: string | null): void {
-    update((w) => (w.panes[paneId] ? { ...w, panes: { ...w.panes, [paneId]: { ...w.panes[paneId]!, sessionId } } } : w));
+  /** Record the backend session; `tmuxSession` (when given) is kept so later re-creates reattach to it. */
+  setSession(paneId: string, sessionId: string | null, tmuxSession?: string | null): void {
+    update((w) => {
+      const pane = w.panes[paneId];
+      if (!pane) return w;
+      const next = tmuxSession ? { ...pane, sessionId, tmux: true, tmuxSession } : { ...pane, sessionId };
+      return { ...w, panes: { ...w.panes, [paneId]: next } };
+    });
   },
 
   renamePane(paneId: string, name: string): void {

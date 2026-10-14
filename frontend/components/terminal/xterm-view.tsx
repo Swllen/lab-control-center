@@ -35,9 +35,18 @@ function ensureSession(paneId: string, cols: number, rows: number, fresh: boolea
   let pending = creating.get(paneId);
   if (!pending) {
     pending = terminalsApi
-      .create({ server_id: pane.serverId, name: pane.name, cols, rows, account: pane.account ?? null })
+      .create({
+        server_id: pane.serverId,
+        name: pane.name,
+        cols,
+        rows,
+        account: pane.account ?? null,
+        // Re-creating a tmux pane (after a backend restart or exit) reattaches to the same tmux session.
+        tmux: !!pane.tmux,
+        tmux_session: pane.tmuxSession ?? null,
+      })
       .then((s) => {
-        workspace.setSession(paneId, s.id);
+        workspace.setSession(paneId, s.id, s.tmux);
         return s.id;
       })
       .finally(() => creating.delete(paneId));

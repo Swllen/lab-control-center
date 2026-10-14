@@ -6,11 +6,12 @@ import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AssistantPanel, type AssistantMode } from "@/components/terminal/assistant-panel";
 import { TabGrid } from "@/components/terminal/tab-grid";
+import { closePaneSession, hasTmux, TmuxSessionsDialog } from "@/components/terminal/tmux";
 import { LayoutSwitcher, NewTerminalMenu, TabStrip } from "@/components/terminal/workspace-toolbar";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog";
-import { terminalsApi } from "@/lib/api";
 import { useServerMap, useServers } from "@/lib/hooks/queries";
+import { getTmuxPref } from "@/lib/terminal/tmux-pref";
 import { useWorkspace, workspace, type PaneAccount, type TabState } from "@/lib/terminal/workspace-store";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +28,7 @@ function TerminalsWorkspace() {
   const { data: servers } = useServers();
   const serverMap = useServerMap();
   const [closingTab, setClosingTab] = useState<TabState | null>(null);
+  const [reattachOpen, setReattachOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantMode, setAssistantMode] = useState<AssistantMode>("docked");
   const activeTab = ws.tabs.find((t) => t.id === ws.activeTabId) ?? ws.tabs[0]!;
@@ -66,11 +68,14 @@ function TerminalsWorkspace() {
     }
     if (pendingDeepLink) return;
     pendingDeepLink = true;
-    workspace.openPane(serverId);
+    workspace.openPane(serverId, undefined, undefined, null, getTmuxPref());
     router.replace("/terminals");
   }, [params, router]);
 
-  const open = (serverId: number, login?: PaneAccount | null) => workspace.openPane(serverId, undefined, undefined, login);
+  const open = (serverId: number, login?: PaneAccount | null) =>
+    workspace.openPane(serverId, undefined, undefined, login, getTmuxPref());
+  const reattach = (serverId: number, login: PaneAccount | null, tmuxSession: string) =>
+    workspace.openPane(serverId, undefined, undefined, login, tmuxSession);
 
   const changeLayout = (layout: TabState["layout"]) => {
     const moved = workspace.setLayout(activeTab.id, layout);
@@ -82,11 +87,11 @@ function TerminalsWorkspace() {
     else workspace.closeTab(tab.id);
   };
 
-  const confirmCloseTab = () => {
+  const closingHasTmux = !!closingTab?.slots.some((id) => id && ws.panes[id] && hasTmux(ws.panes[id]!));
+
+  const confirmCloseTab = (killTmux: boolean) => {
     if (!closingTab) return;
-    for (const pane of workspace.closeTab(closingTab.id)) {
-      if (pane.sessionId) void terminalsApi.close(pane.sessionId).catch(() => undefined);
-    }
+    for (const pane of workspace.closeTab(closingTab.id)) void closePaneSession(pane, killTmux).catch(() => undefined);
     setClosingTab(null);
   };
 
@@ -101,7 +106,7 @@ function TerminalsWorkspace() {
           onRename={workspace.renameTab}
         />
         <LayoutSwitcher value={activeTab.layout} onChange={changeLayout} />
-        <NewTerminalMenu servers={servers ?? []} onOpen={open} />
+        <NewTerminalMenu servers={servers ?? []} onOpen={open} onReattach={() => setReattachOpen(true)} />
         <Button
           size="sm"
           variant={assistantOpen ? "secondary" : "ghost"}
@@ -141,8 +146,16 @@ function TerminalsWorkspace() {
       <p className="flex items-center gap-1.5 px-1 text-[12px] text-subtle">
         <SquareTerminal className="size-3.5" />
         Double-click a tab or session name to rename · Ctrl+C copies a selection (otherwise interrupts) · Ctrl+V pastes · sessions survive
-        page refreshes for 15 minutes
+        page refreshes for 15 minutes · tmux terminals keep running on the server until you kill them
       </p>
+
+      <TmuxSessionsDialog
+        open={reattachOpen}
+        onOpenChange={setReattachOpen}
+        servers={servers ?? []}
+        defaultServerId={focusedPane?.serverId}
+        onAttach={reattach}
+      />
 
       <Dialog open={!!closingTab} onOpenChange={(o) => !o && setClosingTab(null)}>
         <DialogContent className="max-w-md">
@@ -150,11 +163,22 @@ function TerminalsWorkspace() {
             tone="danger"
             icon={<X />}
             title={`Close “${closingTab?.title}”?`}
-            description="All terminals in this tab will be closed and their shell processes ended."
+            description={
+              closingHasTmux
+                ? "Plain shells in this tab will be ended. tmux sessions can keep running on the server so you can reattach later, or be killed too."
+                : "All terminals in this tab will be closed and their shell processes ended."
+            }
           />
           <DialogFooter>
             <Button variant="ghost" onClick={() => setClosingTab(null)}>Cancel</Button>
-            <Button variant="danger-solid" onClick={confirmCloseTab}>Close tab</Button>
+            {closingHasTmux ? (
+              <>
+                <Button variant="danger" onClick={() => confirmCloseTab(true)}>Kill tmux sessions</Button>
+                <Button variant="primary" onClick={() => confirmCloseTab(false)}>Keep tmux running</Button>
+              </>
+            ) : (
+              <Button variant="danger-solid" onClick={() => confirmCloseTab(false)}>Close tab</Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

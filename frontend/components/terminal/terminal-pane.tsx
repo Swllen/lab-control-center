@@ -1,11 +1,14 @@
 "use client";
 
-import { Copy, Maximize2, Minimize2, RotateCw, X } from "lucide-react";
+import { Copy, Layers, Maximize2, Minimize2, RotateCw, X } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { terminalsApi } from "@/lib/api";
 import type { PaneState } from "@/lib/terminal/workspace-store";
 import { workspace } from "@/lib/terminal/workspace-store";
 import { cn } from "@/lib/utils";
+import { closePaneSession, hasTmux } from "./tmux";
 import { XtermView, type ConnState, type XtermHandle } from "./xterm-view";
 
 const STATE_STYLE: Record<ConnState, { dot: string; label: string }> = {
@@ -51,10 +54,12 @@ export function TerminalPane({
   const xterm = useRef<XtermHandle>(null);
   const [state, setState] = useState<{ s: ConnState; detail?: string }>({ s: "connecting" });
   const [editing, setEditing] = useState(false);
+  const [askTmux, setAskTmux] = useState(false);
   const style = STATE_STYLE[state.s];
 
-  const close = () => {
-    if (pane.sessionId) void terminalsApi.close(pane.sessionId).catch(() => undefined);
+  const close = (killTmux = false) => {
+    setAskTmux(false);
+    void closePaneSession(pane, killTmux).catch(() => undefined);
     workspace.closePane(pane.id);
   };
 
@@ -89,6 +94,14 @@ export function TerminalPane({
             {pane.username ?? pane.account}
           </span>
         ) : null}
+        {pane.tmux ? (
+          <span
+            className="shrink-0 rounded-md bg-emerald-400/15 px-1.5 py-0.5 font-mono text-[11px] font-medium text-emerald-300"
+            title={pane.tmuxSession ? `tmux session ${pane.tmuxSession}` : "tmux"}
+          >
+            tmux
+          </span>
+        ) : null}
         <span className="text-slate-600">/</span>
         {editing ? (
           <input
@@ -121,12 +134,32 @@ export function TerminalPane({
           <HeaderButton label={maximized ? "Restore" : "Maximize"} onClick={() => workspace.toggleMaximize(tabId, pane.id)}>
             {maximized ? <Minimize2 /> : <Maximize2 />}
           </HeaderButton>
-          <HeaderButton label="Close" onClick={close} danger><X /></HeaderButton>
+          <HeaderButton label="Close" onClick={() => (hasTmux(pane) ? setAskTmux(true) : close())} danger><X /></HeaderButton>
         </div>
       </header>
       <div className="min-h-0 flex-1 py-1.5 pl-2.5 pr-1">
         <XtermView ref={xterm} paneId={pane.id} focused={focused} onFocus={onFocus} onState={(s, detail) => setState({ s, detail })} />
       </div>
+
+      <Dialog open={askTmux} onOpenChange={setAskTmux}>
+        <DialogContent className="max-w-md" onMouseDown={(e) => e.stopPropagation()}>
+          <DialogHeader
+            icon={<Layers />}
+            title={`Close “${pane.name}”?`}
+            description={
+              <>
+                This terminal runs in tmux session <span className="font-mono text-fg">{pane.tmuxSession ?? "(starting)"}</span>. Keep it
+                running on {serverName} to reattach later from New terminal → Reattach tmux session, or kill it and everything running in it.
+              </>
+            }
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setAskTmux(false)}>Cancel</Button>
+            <Button variant="danger" onClick={() => close(true)}>Kill session</Button>
+            <Button variant="primary" onClick={() => close(false)}>Keep running</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

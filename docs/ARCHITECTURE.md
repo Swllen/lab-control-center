@@ -32,7 +32,7 @@ every SSH/SFTP connection**, and the frontend talks only to the backend.
 | **Host-key verification** uses `~/.ssh/known_hosts` by default (`SSH_KNOWN_HOSTS=auto`). | Secure by default. `ignore` exists only for lab networks with re-imaged machines and is logged loudly. |
 | **Auth scaffolding**: a local admin user (scrypt-hashed password), a signed HttpOnly session cookie (`itsdangerous`), `User.role`, and a `require_role()` dependency. WebSockets authenticate with the same cookie and check `Origin`. | It works now with a single admin and supports RBAC later without changing the API shape. |
 | **REST goes through Next rewrites (`/api/*`). WebSockets connect straight to the backend.** | REST cookies stay first-party. WebSocket upgrades through the Next dev proxy are unreliable. `localhost:3000` and `localhost:8000` are the same *site*, so `SameSite=Lax` cookies still reach the WebSocket. |
-| **Terminals (Phase 2)**: `TerminalSession` wraps an asyncssh PTY channel behind a `TerminalBackend` protocol. | A `TmuxBackend` that runs `tmux new -A -s lcc-<id>` can be added later, so sessions survive browser close, without changing the API. |
+| **Terminals (Phase 2)**: `TerminalSession` wraps an asyncssh PTY channel behind a `TerminalBackend` protocol. `ShellBackend` runs the login shell; `TmuxBackend` (opt-in per terminal, `tmux: true`) runs `tmux new-session -A -s lcc-<id>` under `sh -c`, falling back to the login shell when tmux is not installed. | A plain shell survives page refreshes through the scrollback buffer but dies with the backend or the idle reaper. Under tmux, closing the PTY only detaches, so the shell outlives backend restarts; the pane remembers its tmux session name and re-creating it reattaches. Closing a tmux terminal asks whether to keep or kill the session, and `GET /api/terminals/tmux` lists `lcc-*` (or all) sessions per login for reattaching. |
 | **Scheduler (Phase 4)** sits behind a `Scheduler` protocol. `LocalGpuScheduler` places queued jobs using live MetricsHub GPU data, sets `CUDA_VISIBLE_DEVICES`, and respects `Server.max_jobs`. | A `SlurmScheduler` can implement the same protocol by mapping to `sbatch`/`squeue`/`scancel`. |
 | **Frontend**: Next.js App Router, TanStack Query for REST, a typed WebSocket hook with reconnect/backoff, shadcn-style primitives (Radix + cva), custom SVG gauges and sparklines. | SVG gauges are tiny, precisely styled to the reference, and render many times per second without chart-library overhead. |
 
@@ -119,8 +119,9 @@ All REST endpoints are under `/api` and require a session cookie unless marked p
 | GET | `/api/servers/{id}/metrics/history` | 1 | ring buffer |
 | GET | `/api/metrics/summary` | 1 | every server's latest snapshot (sidebar, palette) |
 | WS | `/ws/servers/{id}/metrics` | 1 | `hello{static,status,history}` then `snapshot` / `status` frames |
-| POST | `/api/terminals` | 2 | `{server_id, name, cols, rows}` → `{session_id}` |
-| GET / DELETE | `/api/terminals[/{sid}]` | 2 | |
+| POST | `/api/terminals` | 2 | `{server_id, name, cols, rows, account?, tmux?, tmux_session?}` → terminal (incl. `tmux` session name) |
+| GET / DELETE | `/api/terminals[/{sid}]` | 2 | `DELETE ?kill_tmux=true` also kills the tmux session (default: detach) |
+| GET / DELETE | `/api/terminals/tmux?server_id=&account=` | 2 | list (`&all=true` includes non-`lcc-*`) / kill (`&name=`) tmux sessions for that login |
 | WS | `/ws/terminals/{sid}` | 2 | binary = pty data, text JSON = `{type:resize}` |
 | GET | `/api/servers/{id}/files?path=` | 3 | list a directory |
 | GET | `/api/servers/{id}/download?path=` | 3 | streamed, Range-capable |
@@ -138,7 +139,7 @@ All REST endpoints are under `/api` and require a session cookie unless marked p
 ## Implementation plan
 
 1. **Phase 1 (done)**: scaffold, auth, server CRUD and connection test, SSH pool, probe-based metrics hub, metrics WebSocket, glass UI shell, dashboard, servers page, hardware page, demo servers.
-2. **Phase 2 (done)**: `terminal_manager` (PTY channels and resize), xterm.js with the fit and webgl addons, tabs plus 1×1/1×2/2×2 split layouts saved to localStorage, reconnect/duplicate/maximize.
+2. **Phase 2 (done)**: `terminal_manager` (PTY channels and resize), xterm.js with the fit and webgl addons, tabs plus 1×1/1×2/2×2 split layouts saved to localStorage, reconnect/duplicate/maximize, optional tmux backend with reattach.
 3. **Phase 3 (done)**: `sftp_manager` (chunked async reads and writes, never whole files), streaming download with `StreamingResponse`, streaming upload, transfer manager with progress, cancel, and retry.
 4. **Phase 4 (done)**: Job/Sweep APIs, `LocalGpuScheduler` (nohup wrapper writing pid and exit code), log tailing.
 5. **Phase 5**: logs page, notifications, preferences, polish.

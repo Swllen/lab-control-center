@@ -5,9 +5,10 @@ connections: output is kept in a bounded scrollback buffer and replayed when a b
 (re)attaches, so a page refresh or brief network drop does not kill the shell. Sessions with no
 attached client are reaped after ``terminal_idle_timeout_s``.
 
-How the remote shell is started is delegated to a ``TerminalBackend``; ``ShellBackend`` runs the
-login shell. A tmux backend (``tmux new -A -s lcc-<id>``) can be dropped in later to make
-sessions survive control-center restarts and closed browsers.
+How the remote shell is started is delegated to a ``TerminalBackend``: ``ShellBackend`` runs the
+login shell; ``TmuxBackend`` runs ``tmux new -A -s lcc-<id>`` (or a named session to reattach
+to), so the shell survives control-center restarts and idle reaping. Closing a tmux terminal only
+detaches its client unless the caller asks to kill the tmux session too.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import asyncio
 import contextlib
 import logging
 import secrets
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -35,14 +37,70 @@ _READ_CHUNK = 64 * 1024
 _SUBSCRIBER_QUEUE = 2048  # chunks; a client that falls this far behind is disconnected
 
 
+# Prefix of tmux sessions created by the control center (``lcc-<terminal id>``).
+TMUX_PREFIX = "lcc-"
+_NO_TMUX = "__LCC_NO_TMUX__"
+_TMUX_FORMAT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{session_windows}"
+
+
 class TerminalBackend(Protocol):
-    def command(self, session_id: str) -> str | None:
+    def command(self, session: TerminalSession) -> str | None:
         """Remote command to run inside the PTY, or None for the user's login shell."""
 
 
 class ShellBackend:
-    def command(self, session_id: str) -> str | None:
+    def command(self, session: TerminalSession) -> str | None:
         return None
+
+
+class TmuxBackend:
+    """Attach to (or create) ``session.tmux``; fall back to the login shell if tmux is missing."""
+
+    def command(self, session: TerminalSession) -> str | None:
+        assert session.tmux
+        script = (
+            f"if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s {shlex.quote(session.tmux)}; fi; "
+            r"printf '\033[33mtmux is not installed on this host; starting a plain shell.\033[0m\r\n'; "
+            'exec "${SHELL:-/bin/sh}" -l'
+        )
+        # Run under sh so this works whatever the user's login shell is (fish, tcsh, ...).
+        return f"sh -c {shlex.quote(script)}"
+
+
+@dataclass
+class TmuxSessionInfo:
+    name: str
+    created: float
+    attached: int  # attached clients, including our own PTYs
+    windows: int
+
+
+def tmux_list_command() -> str:
+    script = (
+        f"command -v tmux >/dev/null 2>&1 || {{ echo {_NO_TMUX}; exit 0; }}; "
+        f"tmux list-sessions -F {shlex.quote(_TMUX_FORMAT)} 2>/dev/null; exit 0"
+    )
+    return f"sh -c {shlex.quote(script)}"
+
+
+def parse_tmux_list(output: str) -> list[TmuxSessionInfo] | None:
+    """Parse ``tmux_list_command`` output; None means tmux is not installed."""
+    if output.strip() == _NO_TMUX:
+        return None
+    sessions: list[TmuxSessionInfo] = []
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 4:
+            continue
+        name, created, attached, windows = parts
+        with contextlib.suppress(ValueError):
+            sessions.append(TmuxSessionInfo(name, float(created), int(attached), int(windows)))
+    return sessions
+
+
+def tmux_kill_command(name: str) -> str:
+    # "=name" matches the session name exactly instead of as a prefix.
+    return f"tmux kill-session -t {shlex.quote('=' + name)}"
 
 
 class SlowConsumer(Exception):
@@ -61,6 +119,8 @@ class TerminalSession:
     # ~/.ssh/config alias of an alternate account (None = the server's own login).
     account: str | None = None
     username: str | None = None
+    # tmux session name when started by TmuxBackend; None = plain login shell.
+    tmux: str | None = None
     created_at: float = field(default_factory=time.time)
     state: SessionState = "starting"
     exit_status: int | None = None
@@ -129,9 +189,10 @@ class TerminalSession:
 
 
 class TerminalManager:
-    def __init__(self, ssh: SSHManager, backend: TerminalBackend | None = None) -> None:
+    def __init__(self, ssh: SSHManager) -> None:
         self._ssh = ssh
-        self._backend = backend or ShellBackend()
+        self._shell: TerminalBackend = ShellBackend()
+        self._tmux: TerminalBackend = TmuxBackend()
         self._sessions: dict[str, TerminalSession] = {}
         self._reaper: asyncio.Task[None] | None = None
 
@@ -155,9 +216,43 @@ class TerminalManager:
 
     # ------------------------------------------------------------------ lifecycle
 
+    @staticmethod
+    def _target(server: object, account: SSHConfigHost | None) -> tuple[SSHTarget, int | str]:
+        server_id: int = server.id  # type: ignore[attr-defined]
+        if account is None:
+            return SSHTarget.from_model(server), server_id
+        return SSHTarget(account.hostname, account.port, account.user or "", None, account.alias), f"{server_id}@{account.alias}"
+
+    async def run(self, server: object, account: SSHConfigHost | None, command: str, timeout: float = 15) -> str:
+        """Run a short non-interactive command as a terminal login (the server's own or an alternate account)."""
+        target, conn_key = self._target(server, account)
+        conn = await self._ssh.get(conn_key, target)
+        try:
+            result = await asyncio.wait_for(conn.run(command, check=False), timeout)
+        except asyncssh.ChannelOpenError:
+            # sshd MaxSessions reached on the shared connection (many open terminals): use a one-off one.
+            own = await open_connection(target)
+            try:
+                result = await asyncio.wait_for(own.run(command, check=False), timeout)
+            finally:
+                own.close()
+        except (asyncssh.ConnectionLost, asyncssh.DisconnectError, OSError):
+            await self._ssh.invalidate(conn_key)
+            conn = await self._ssh.get(conn_key, target)
+            result = await asyncio.wait_for(conn.run(command, check=False), timeout)
+        out = result.stdout
+        return out.decode(errors="replace") if isinstance(out, bytes) else (out or "")
+
+    async def list_tmux(self, server: object, account: SSHConfigHost | None) -> list[TmuxSessionInfo] | None:
+        """tmux sessions on the server for that login, or None if tmux is not installed."""
+        return parse_tmux_list(await self.run(server, account, tmux_list_command()))
+
+    async def kill_tmux(self, server: object, account: SSHConfigHost | None, name: str) -> None:
+        await self.run(server, account, tmux_kill_command(name))
+
     async def create(
         self, *, server: object, owner_id: int, name: str, cols: int, rows: int,
-        account: SSHConfigHost | None = None,
+        account: SSHConfigHost | None = None, tmux: bool = False, tmux_session: str | None = None,
     ) -> TerminalSession:
         server_id: int = server.id  # type: ignore[attr-defined]
         session = TerminalSession(
@@ -169,15 +264,14 @@ class TerminalManager:
             cols=max(2, cols),
             rows=max(1, rows),
         )
+        target, conn_key = self._target(server, account)
         if account is None:
-            target = SSHTarget.from_model(server)
-            conn_key: int | str = server_id
             session.username = server.username  # type: ignore[attr-defined]
         else:
-            target = SSHTarget(account.hostname, account.port, account.user or "", None, account.alias)
-            conn_key = f"{server_id}@{account.alias}"
             session.account, session.username = account.alias, account.user
-        command = self._backend.command(session.id)
+        if tmux or tmux_session:
+            session.tmux = tmux_session or f"{TMUX_PREFIX}{session.id}"
+        command = (self._tmux if session.tmux else self._shell).command(session)
         conn = await self._ssh.get(conn_key, target)
         try:
             process = await self._open_pty(conn, command, session)
@@ -246,4 +340,4 @@ class TerminalManager:
                     await self.close(session.id)
 
 
-__all__ = ["SSHError", "TerminalManager", "TerminalSession"]
+__all__ = ["SSHError", "TMUX_PREFIX", "TerminalManager", "TerminalSession", "TmuxSessionInfo"]

@@ -14,6 +14,7 @@ import type {
   SSHConfigHost,
   TerminalAccount,
   TerminalSession,
+  TmuxSessionList,
   Transfer,
   User,
 } from "@/lib/types";
@@ -48,11 +49,31 @@ export const serversApi = {
 export const terminalsApi = {
   list: () => api<TerminalSession[]>("/api/terminals"),
   accounts: () => api<TerminalAccount[]>("/api/terminals/accounts"),
-  create: (body: { server_id: number; name: string; cols: number; rows: number; account?: string | null }) =>
-    api<TerminalSession>("/api/terminals", { method: "POST", body }),
+  create: (body: {
+    server_id: number;
+    name: string;
+    cols: number;
+    rows: number;
+    account?: string | null;
+    tmux?: boolean;
+    tmux_session?: string | null;
+  }) => api<TerminalSession>("/api/terminals", { method: "POST", body }),
   rename: (id: string, name: string) => api<TerminalSession>(`/api/terminals/${id}`, { method: "PATCH", body: { name } }),
-  close: (id: string) => api<void>(`/api/terminals/${id}`, { method: "DELETE" }),
+  /** Closing a tmux terminal only detaches from it unless `killTmux` is set. */
+  close: (id: string, killTmux = false) =>
+    api<void>(`/api/terminals/${id}${killTmux ? "?kill_tmux=true" : ""}`, { method: "DELETE" }),
+  tmuxSessions: (serverId: number, account: string | null, all = false) =>
+    api<TmuxSessionList>(`/api/terminals/tmux?${tmuxQuery(serverId, account, { all: all ? "true" : "" })}`),
+  killTmux: (serverId: number, account: string | null, name: string) =>
+    api<void>(`/api/terminals/tmux?${tmuxQuery(serverId, account, { name })}`, { method: "DELETE" }),
 };
+
+function tmuxQuery(serverId: number, account: string | null, extra: Record<string, string>): URLSearchParams {
+  const q = new URLSearchParams({ server_id: String(serverId) });
+  if (account) q.set("account", account);
+  for (const [k, v] of Object.entries(extra)) if (v) q.set(k, v);
+  return q;
+}
 
 export const metricsApi = {
   summary: () => api<ServerMetrics[]>("/api/metrics/summary"),

@@ -54,7 +54,7 @@ export function TabGrid({
                 onFocus={() => onFocusPane(pane.id)}
               />
             ) : (
-              <EmptySlot servers={serverList} onOpen={(serverId, login) => workspace.openInSlot(tab.id, slot, serverId, login)} />
+              <EmptySlot servers={serverList} onOpen={(serverId, login, tmux) => workspace.openInSlot(tab.id, slot, serverId, login, tmux)} />
             )}
           </div>
         );

@@ -288,6 +288,8 @@ export interface TerminalSession {
   name: string;
   account: string | null;
   username: string | null;
+  /** tmux session name, or null for a plain login shell. */
+  tmux: string | null;
   state: "starting" | "running" | "closed";
   exit_status: number | null;
   error: string | null;
@@ -301,6 +303,27 @@ export interface TerminalAccount {
   account: string | null;
   username: string | null;
   primary: boolean;
+}
+
+export interface TmuxSession {
+  name: string;
+  /** Unix seconds. */
+  created: number;
+  /** tmux clients attached from anywhere, including control-center terminals. */
+  attached: number;
+  windows: number;
+  /** Created by the control center (lcc-* prefix). */
+  managed: boolean;
+  /** Your open control-center terminals attached to it. */
+  terminal_ids: string[];
+}
+
+export interface TmuxSessionList {
+  server_id: number;
+  account: string | null;
+  /** False when tmux is not installed for this login. */
+  available: boolean;
+  sessions: TmuxSession[];
 }
 
 // ---------------------------------------------------------------- auth

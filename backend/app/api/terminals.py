@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import json
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 
 from app.api.deps import get_server_or_404
 from app.core.deps import DbSession, OperatorUser
@@ -22,10 +22,18 @@ from app.models import Role, User
 from sqlalchemy import select
 
 from app.models import Server
-from app.schemas.terminal import TerminalAccount, TerminalCreate, TerminalOut, TerminalRename
-from app.services.ssh_config import alternate_accounts
+from app.schemas.terminal import (
+    TMUX_NAME_PATTERN,
+    TerminalAccount,
+    TerminalCreate,
+    TerminalOut,
+    TerminalRename,
+    TmuxSession,
+    TmuxSessionList,
+)
+from app.services.ssh_config import SSHConfigHost, alternate_accounts
 from app.services.ssh_manager import SSHError
-from app.services.terminal_manager import TerminalManager, TerminalSession
+from app.services.terminal_manager import TMUX_PREFIX, TerminalManager, TerminalSession
 
 router = APIRouter(tags=["terminals"])
 
@@ -37,7 +45,7 @@ def _manager(request: Request) -> TerminalManager:
 def _out(s: TerminalSession) -> TerminalOut:
     return TerminalOut(
         id=s.id, server_id=s.server_id, server_name=s.server_name, name=s.name, state=s.state,
-        account=s.account, username=s.username,
+        account=s.account, username=s.username, tmux=s.tmux,
         exit_status=s.exit_status, error=s.error, created_at=s.created_at, attached=len(s.subscribers),
     )
 
@@ -49,7 +57,31 @@ def _owned(manager: TerminalManager, session_id: str, user: User) -> TerminalSes
     return session
 
 
-@router.get("/api/terminals", response_model=list[TerminalOut])
+async def _shell_server(server_id: int, db: DbSession) -> Server:
+    server = await get_server_or_404(server_id, db)
+    if server.transport != "ssh":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Simulated servers have no shell")
+    return server
+
+
+def _account(server: Server, alias: str | None) -> SSHConfigHost | None:
+    if not alias:
+        return None
+    account = next((h for h in alternate_accounts(server) if h.alias == alias), None)
+    if account is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{alias}' is not an account for {server.name}")
+    return account
+
+
+def _remote_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, SSHError):
+        return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    if isinstance(exc, TimeoutError):
+        return HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Timed out talking to the server")
+    return HTTPException(status.HTTP_502_BAD_GATEWAY, f"Remote command failed: {exc}")
+
+
+@router.get("/api/terminals",response_model=list[TerminalOut])
 async def list_terminals(request: Request, user: OperatorUser) -> list[TerminalOut]:
     return [_out(s) for s in _manager(request).list(owner_id=user.id)]
 
@@ -67,19 +99,62 @@ async def list_accounts(_: OperatorUser, db: DbSession) -> list[TerminalAccount]
     return out
 
 
+@router.get("/api/terminals/tmux", response_model=TmuxSessionList)
+async def list_tmux_sessions(
+    request: Request,
+    user: OperatorUser,
+    db: DbSession,
+    server_id: int,
+    account: str | None = None,
+    all: bool = Query(False, description="Include tmux sessions not created by the control center"),
+) -> TmuxSessionList:
+    """tmux sessions on a server (for that login), so the UI can reattach after a control-center restart."""
+    server = await _shell_server(server_id, db)
+    manager = _manager(request)
+    try:
+        found = await manager.list_tmux(server, _account(server, account))
+    except Exception as exc:
+        raise _remote_error(exc) from exc
+    mine: dict[str, list[str]] = {}
+    for s in manager.list(owner_id=user.id):
+        if s.tmux and s.state != "closed" and s.server_id == server.id and s.account == (account or None):
+            mine.setdefault(s.tmux, []).append(s.id)
+    sessions = [
+        TmuxSession(
+            name=t.name, created=t.created, attached=t.attached, windows=t.windows,
+            managed=t.name.startswith(TMUX_PREFIX), terminal_ids=mine.get(t.name, []),
+        )
+        for t in (found or [])
+        if all or t.name.startswith(TMUX_PREFIX)
+    ]
+    sessions.sort(key=lambda t: t.created, reverse=True)
+    return TmuxSessionList(server_id=server.id, account=account or None, available=found is not None, sessions=sessions)
+
+
+@router.delete("/api/terminals/tmux", status_code=status.HTTP_204_NO_CONTENT)
+async def kill_tmux_session(
+    request: Request,
+    _: OperatorUser,
+    db: DbSession,
+    server_id: int,
+    name: str = Query(min_length=1, max_length=128, pattern=TMUX_NAME_PATTERN),
+    account: str | None = None,
+) -> None:
+    server = await _shell_server(server_id, db)
+    try:
+        await _manager(request).kill_tmux(server, _account(server, account), name)
+    except Exception as exc:
+        raise _remote_error(exc) from exc
+
+
 @router.post("/api/terminals", response_model=TerminalOut, status_code=status.HTTP_201_CREATED)
 async def create_terminal(body: TerminalCreate, request: Request, user: OperatorUser, db: DbSession) -> TerminalOut:
-    server = await get_server_or_404(body.server_id, db)
-    if server.transport != "ssh":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Simulated servers have no shell")
-    account = None
-    if body.account:
-        account = next((h for h in alternate_accounts(server) if h.alias == body.account), None)
-        if account is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"'{body.account}' is not an account for {server.name}")
+    server = await _shell_server(body.server_id, db)
+    account = _account(server, body.account)
     try:
         session = await _manager(request).create(
-            server=server, owner_id=user.id, name=body.name, cols=body.cols, rows=body.rows, account=account
+            server=server, owner_id=user.id, name=body.name, cols=body.cols, rows=body.rows, account=account,
+            tmux=body.tmux, tmux_session=body.tmux_session,
         )
     except SSHError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
@@ -101,10 +176,28 @@ async def rename_terminal(session_id: str, body: TerminalRename, request: Reques
 
 
 @router.delete("/api/terminals/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def close_terminal(session_id: str, request: Request, user: OperatorUser) -> None:
+async def close_terminal(
+    session_id: str,
+    request: Request,
+    user: OperatorUser,
+    db: DbSession,
+    kill_tmux: bool = Query(False, description="Also kill the tmux session (default: just detach from it)"),
+) -> None:
     manager = _manager(request)
-    _owned(manager, session_id, user)
+    session = _owned(manager, session_id, user)
+    failure: HTTPException | None = None
+    if kill_tmux and session.tmux:
+        try:
+            server = await _shell_server(session.server_id, db)
+            await manager.kill_tmux(server, _account(server, session.account), session.tmux)
+        except HTTPException as exc:
+            failure = exc
+        except Exception as exc:
+            failure = _remote_error(exc)
+    # Close our PTY even if the kill failed; closing alone just detaches the tmux client.
     await manager.close(session_id)
+    if failure:
+        raise failure
 
 
 def _status_frame(s: TerminalSession) -> str:

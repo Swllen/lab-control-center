@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, SquareTerminal, X } from "lucide-react";
+import { Layers, Plus, SquareTerminal, X } from "lucide-react";
 import { useState } from "react";
 import { StatusDot } from "@/components/server/status-badge";
 import { Button } from "@/components/ui/button";
@@ -9,9 +9,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useMetricsSummary, useTerminalAccounts } from "@/lib/hooks/queries";
+import { setTmuxPref, useTmuxPref } from "@/lib/terminal/tmux-pref";
+import { TmuxSwitchVisual } from "./tmux";
 import type { PaneAccount } from "@/lib/terminal/workspace-store";
 import type { Layout, TabState, Workspace } from "@/lib/terminal/workspace-store";
 import type { Server } from "@/lib/types";
@@ -54,12 +57,15 @@ export function LayoutSwitcher({ value, onChange }: { value: Layout; onChange: (
 export function NewTerminalMenu({
   servers,
   onOpen,
+  onReattach,
 }: {
   servers: Server[];
   onOpen: (serverId: number, login?: PaneAccount | null) => void;
+  onReattach: () => void;
 }) {
   const { data: summary } = useMetricsSummary();
   const { data: accounts } = useTerminalAccounts();
+  const useTmux = useTmuxPref();
   const state = new Map((summary ?? []).map((m) => [m.server_id, m.status.state]));
   const shells = servers.filter((s) => s.transport === "ssh");
   return (
@@ -91,6 +97,23 @@ export function NewTerminalMenu({
               )),
           ])
         )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault(); // keep the menu open while toggling
+            setTmuxPref(!useTmux);
+          }}
+          role="menuitemcheckbox"
+          aria-checked={useTmux}
+          title="New terminals run inside tmux and keep running on the server after you close them"
+        >
+          <TmuxSwitchVisual on={useTmux} />
+          <span className="flex-1">Use tmux</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onReattach}>
+          <Layers />
+          <span className="flex-1">Reattach tmux session…</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
