@@ -60,7 +60,7 @@ export default function DashboardPage() {
         </GlassCard>
       )}
 
-      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-[1.12fr_1fr]">
+      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
         <GlassCard className="min-w-0 pb-3">
           <CardHeader icon={<ListChecks />} title="Recent Jobs / Queue" action={<ViewAll href="/jobs" />} />
           <div className="px-3"><JobsTable jobs={jobs.data} loading={jobs.isLoading} onOpen={(j) => router.push(`/jobs?job=${j.id}`)} /></div>

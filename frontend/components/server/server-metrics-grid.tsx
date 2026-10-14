@@ -1,12 +1,14 @@
 "use client";
 
 import { ArrowDown, ArrowUp, ArrowUpDown, Cpu, Database, MemoryStick, Microchip, MonitorDot } from "lucide-react";
-import { MetricTile, MiniBars } from "@/components/metrics/metric-tile";
+import { MetricTile } from "@/components/metrics/metric-tile";
 import { RingGauge, toneForLoad } from "@/components/metrics/ring-gauge";
 import { Sparkline } from "@/components/metrics/sparkline";
 import { ProgressBar, Skeleton } from "@/components/ui/misc";
 import { formatBitRate, formatBytes, formatLinkSpeed, formatWatts } from "@/lib/format";
 import type { LiveMetrics } from "@/lib/metrics-store";
+import type { GpuMetrics } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { diskTotals, gpuUtilSeries, maxLinkSpeed, summarizeGpus, vramSeries } from "@/lib/metrics-derive";
 
 const SPARK_POINTS = 40;
@@ -59,13 +61,13 @@ export function ServerMetricsGrid({ live, dimmed }: { live: LiveMetrics; dimmed:
             title="GPU"
             subtitle={gpu.label}
             footer={
-              <div className="flex items-center justify-between gap-3">
-                <MiniBars values={gpu.perGpuUtil} labels={gpu.perGpuUtil.map((u, i) => `GPU ${i}: ${Math.round(u)}% util`)} />
-                <span className="tabular truncate text-[11.5px] text-muted">
-                  {gpu.maxTemp != null ? `${Math.round(gpu.maxTemp)}°C max` : ""}
-                  {gpu.power != null ? ` · ${formatWatts(gpu.power)}` : ""}
+              gpu.maxTemp != null || gpu.power != null ? (
+                <span className="tabular block truncate text-[11.5px] text-muted">
+                  {[gpu.maxTemp != null ? `${Math.round(gpu.maxTemp)}°C max` : null, gpu.power != null ? formatWatts(gpu.power) : null]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </span>
-              </div>
+              ) : undefined
             }
           >
             <RingGauge value={gpu.utilization} tone="green" />
@@ -77,19 +79,18 @@ export function ServerMetricsGrid({ live, dimmed }: { live: LiveMetrics; dimmed:
             icon={<MonitorDot />}
             iconTone="green"
             title="VRAM"
-            subtitle={`${formatBytes(gpu.memTotal)} total`}
+            subtitle={`${formatBytes(gpu.memUsed)} / ${formatBytes(gpu.memTotal)}`}
             footer={
-              <div className="flex items-center justify-between gap-3">
-                <MiniBars values={gpu.perGpuMem} labels={gpu.perGpuMem.map((m, i) => `GPU ${i}: ${Math.round(m)}% memory`)} />
-                <span className="tabular truncate text-[11.5px] text-muted">
-                  {formatBytes(gpu.memUsed)} used
-                </span>
-              </div>
+              <span className="tabular block truncate text-[11.5px] text-muted">
+                {formatBytes(Math.max(gpu.memTotal - gpu.memUsed, 0))} free
+              </span>
             }
           >
             <RingGauge value={gpu.memPercent} tone={toneForLoad(gpu.memPercent, "green")} />
             <Sparkline className="ml-1 min-w-0 max-w-[110px] flex-[1_1_0]" values={vramSeries(history)} max={100} tone="green" />
           </MetricTile>
+
+          <PerGpuList gpus={snap.gpus} dimmed={dimmed} />
         </>
       ) : (
         <MetricTile dimmed={dimmed} className="sm:col-span-2" icon={<Microchip />} iconTone="green" title="GPU" subtitle="No NVIDIA GPU detected" />
@@ -109,6 +110,58 @@ export function ServerMetricsGrid({ live, dimmed }: { live: LiveMetrics; dimmed:
           <span className="flex items-center gap-1"><ArrowDown className="size-3.5 text-primary" />{formatBitRate(snap.net.rx_bps)}</span>
         </div>
       </MetricTile>
+    </div>
+  );
+}
+
+const GPU_COLS: Record<number, string> = { 2: "sm:grid-cols-2", 3: "sm:grid-cols-3" };
+
+/** "58/96 GB": both sides in the total's unit, compact enough for a narrow cell. */
+function formatGpuMem(used: number, total: number): string {
+  const gb = (b: number) => b / 1024 ** 3;
+  const fmt = (v: number) => (v >= 10 ? Math.round(v).toString() : v.toFixed(1).replace(/\.0$/, ""));
+  return `${fmt(gb(used))}/${fmt(gb(total))} GB`;
+}
+
+/** One small tile per card, so a busy (or idle) GPU can't hide in the average. */
+function PerGpuList({ gpus, dimmed }: { gpus: GpuMetrics[]; dimmed: boolean }) {
+  if (gpus.length < 2) return null;
+  return (
+    <div className={cn("grid grid-cols-2 gap-3 sm:col-span-2", GPU_COLS[gpus.length] ?? "sm:grid-cols-4")}>
+      {gpus.map((g) => {
+        const memPct = g.memory_total ? (100 * g.memory_used) / g.memory_total : 0;
+        const hot = g.temperature_c != null && g.temperature_c >= 85;
+        return (
+          <div
+            key={g.index}
+            className={cn(
+              "tile min-w-0 rounded-2xl px-3.5 py-3 transition-[background-color,opacity] duration-300 hover:bg-tile-hover",
+              dimmed && "opacity-55 saturate-50",
+            )}
+          >
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[13px] font-semibold">GPU {g.index}</span>
+              {g.temperature_c != null ? (
+                <span className={cn("tabular text-[11.5px]", hot ? "text-warning" : "text-muted")}>
+                  {Math.round(g.temperature_c)}°C
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-2 flex justify-between gap-2 text-[11.5px]">
+              <span className="text-muted">Util</span>
+              <span className="tabular font-medium">{Math.round(g.utilization)}%</span>
+            </div>
+            <ProgressBar value={g.utilization} tone="success" className="mt-1 h-1" />
+            <div className="mt-2 flex justify-between gap-2 text-[11.5px]">
+              <span className="text-muted">VRAM</span>
+              <span className="tabular truncate font-medium" title={`${formatBytes(g.memory_used)} / ${formatBytes(g.memory_total)}`}>
+                {formatGpuMem(g.memory_used, g.memory_total)}
+              </span>
+            </div>
+            <ProgressBar value={memPct} tone={memPct > 92 ? "danger" : "success"} className="mt-1 h-1" />
+          </div>
+        );
+      })}
     </div>
   );
 }
