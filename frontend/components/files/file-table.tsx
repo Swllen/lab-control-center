@@ -1,7 +1,7 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Copy, Download, EllipsisVertical, FolderInput, Pencil, Send, Trash2 } from "lucide-react";
-import { useMemo, useRef, type KeyboardEvent, type MouseEvent } from "react";
+import { ArrowDown, ArrowUp, Copy, Download, EllipsisVertical, FolderInput, Pencil, ScanEye, Send, Trash2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +21,15 @@ export interface SortState {
   dir: 1 | -1;
 }
 
-export type RowAction = "open" | "download" | "rename" | "move" | "copy-to" | "copy-path" | "delete";
+export type RowAction = "open" | "preview" | "download" | "rename" | "move" | "copy-to" | "copy-path" | "delete";
+
+// One shared collator: `localeCompare` with options builds a new one per call, which made sorting
+// a 10k+ entry folder take seconds.
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/** Rows are a fixed height so only the visible window needs rendering (folders can hold 20k entries). */
+const ROW_H = 36;
+const OVERSCAN = 12;
 
 export function sortEntries(entries: FileEntry[], sort: SortState): FileEntry[] {
   return [...entries].sort((a, b) => {
@@ -31,7 +39,7 @@ export function sortEntries(entries: FileEntry[], sort: SortState): FileEntry[] 
     let cmp = 0;
     if (sort.key === "size") cmp = a.size - b.size;
     else if (sort.key === "mtime") cmp = (a.mtime ?? 0) - (b.mtime ?? 0);
-    if (cmp === 0) cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+    if (cmp === 0) cmp = collator.compare(a.name, b.name);
     return cmp * sort.dir;
   });
 }
@@ -57,6 +65,38 @@ export function FileTable({
 }) {
   const anchor = useRef<string | null>(null);
   const index = useMemo(() => new Map(entries.map((e, i) => [e.path, i])), [entries]);
+  const scroller = useRef<HTMLDivElement>(null);
+  const head = useRef<HTMLTableSectionElement>(null);
+  const [view, setView] = useState({ top: 0, height: 800 });
+
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const measure = () => setView({ top: el.scrollTop, height: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const first = Math.max(0, Math.floor(view.top / ROW_H) - OVERSCAN);
+  const last = Math.min(entries.length, Math.ceil((view.top + view.height) / ROW_H) + OVERSCAN);
+
+  // Follow selection changes, including ones made elsewhere (e.g. stepping through files in the
+  // preview panel): arrow keys continue from the selected row, which is scrolled into view.
+  useEffect(() => {
+    if (selected.size !== 1) return;
+    const path = selected.values().next().value ?? null;
+    anchor.current = path;
+    const i = path ? index.get(path) : undefined;
+    const el = scroller.current;
+    if (i == null || !el) return;
+    const headH = head.current?.offsetHeight ?? 0;
+    const rowTop = headH + i * ROW_H;
+    const bottomPad = 64; // pb-16 leaves room for the selection bar
+    if (rowTop - headH < el.scrollTop) el.scrollTop = rowTop - headH;
+    else if (rowTop + ROW_H > el.scrollTop + el.clientHeight - bottomPad) el.scrollTop = rowTop + ROW_H - el.clientHeight + bottomPad;
+  }, [selected, index]);
 
   const click = (e: MouseEvent, entry: FileEntry) => {
     if (e.shiftKey && anchor.current && index.has(anchor.current)) {
@@ -88,7 +128,6 @@ export function FileTable({
       if (next) {
         anchor.current = next.path;
         onSelect(new Set([next.path]));
-        document.getElementById(`row-${next.path}`)?.scrollIntoView({ block: "nearest" });
       }
     } else if (e.key === "Backspace") onKeyAction("up");
     else if (e.key === "Delete") onKeyAction("delete");
@@ -111,9 +150,16 @@ export function FileTable({
   );
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto pb-16 outline-none" tabIndex={0} onKeyDown={keydown} aria-label="Files">
+    <div
+      ref={scroller}
+      className="min-h-0 flex-1 overflow-auto pb-16 outline-none"
+      tabIndex={0}
+      onKeyDown={keydown}
+      onScroll={(e) => setView({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}
+      aria-label="Files"
+    >
       <table className="w-full min-w-[640px] border-separate border-spacing-0 text-[13px]">
-        <thead className="sticky top-0 z-10 bg-glass-strong backdrop-blur-xl">
+        <thead ref={head} className="sticky top-0 z-10 bg-glass-strong backdrop-blur-xl">
           <tr className="text-left text-[12px] text-muted [&_th]:border-b [&_th]:border-line [&_th]:px-3 [&_th]:py-2 [&_th]:font-medium">
             {header("name", "Name", "pl-5")}
             {header("size", "Size", "w-24 text-right")}
@@ -130,16 +176,18 @@ export function FileTable({
                   <td colSpan={6} className="px-4 py-1.5"><Skeleton className="h-6" /></td>
                 </tr>
               ))
-            : entries.map((entry) => {
+            : [
+                first > 0 ? <tr key="pad-top" aria-hidden style={{ height: first * ROW_H }} /> : null,
+                ...entries.slice(first, last).map((entry) => {
                 const isSel = selected.has(entry.path);
                 return (
                   <tr
                     key={entry.path}
-                    id={`row-${entry.path}`}
+                    style={{ height: ROW_H }}
                     onClick={(e) => click(e, entry)}
                     onDoubleClick={() => onAction("open", entry)}
                     className={cn(
-                      "group cursor-default select-none [&_td]:border-b [&_td]:border-line/60 [&_td]:px-3 [&_td]:py-[7px]",
+                      "group cursor-default select-none [&_td]:border-b [&_td]:border-line/60 [&_td]:px-3 [&_td]:py-0",
                       isSel ? "bg-primary-soft" : "hover:bg-tile-hover/70",
                     )}
                     aria-selected={isSel}
@@ -167,7 +215,9 @@ export function FileTable({
                     </td>
                   </tr>
                 );
-              })}
+              }),
+                last < entries.length ? <tr key="pad-bottom" aria-hidden style={{ height: (entries.length - last) * ROW_H }} /> : null,
+              ]}
         </tbody>
       </table>
     </div>
@@ -188,6 +238,9 @@ function RowMenu({ entry, onAction }: { entry: FileEntry; onAction: (a: RowActio
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent onClick={(e) => e.stopPropagation()}>
+        {isDirLike(entry) ? null : (
+          <DropdownMenuItem onSelect={() => onAction("preview", entry)}><ScanEye /> Preview</DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={() => onAction("download", entry)}>
           <Download /> {isDirLike(entry) ? "Download as .tar" : "Download"}
         </DropdownMenuItem>

@@ -27,6 +27,18 @@ class DirListing(BaseModel):
     truncated: bool = False
 
 
+class FilePreview(BaseModel):
+    path: str
+    name: str
+    size: int
+    mtime: int | None
+    kind: Literal["text", "binary"]
+    encoding: str | None = Field(description='"utf-8", or "utf-8 (lossy)" when some bytes were not valid UTF-8')
+    content: str | None = Field(description="Decoded text from the start of the file; None for binary files")
+    bytes_read: int
+    truncated: bool = Field(description="True when only the first `bytes_read` bytes of the file are included")
+
+
 class PathBody(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 

@@ -12,6 +12,7 @@ import {
   FolderUp,
   Pencil,
   RefreshCw,
+  ScanEye,
   Send,
   Trash2,
   TriangleAlert,
@@ -34,6 +35,7 @@ import { Breadcrumbs } from "./breadcrumbs";
 import { DirTree } from "./dir-tree";
 import { CopyToServerDialog, DeleteDialog, PromptDialog } from "./file-dialogs";
 import { isDirLike } from "./file-icon";
+import { FilePreviewPanel } from "./file-preview";
 import { FileTable, sortEntries, type RowAction, type SortState } from "./file-table";
 import posixPath from "./posix-path";
 
@@ -71,13 +73,17 @@ export function FileManager({
   const [sort, setSort] = useState<SortState>({ key: "name", dir: 1 });
   const [showHidden, setShowHidden] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => setShowHidden(readShowHidden()), []);
-  useEffect(() => setSelected(new Set()), [serverId, path]);
+  useEffect(() => {
+    setSelected(new Set());
+    setPreviewPath(null);
+  }, [serverId, path]);
 
   const listing = useQuery({
     queryKey: queryKeys.files(serverId, path),
@@ -114,6 +120,9 @@ export function FileManager({
   }, [current, home, serverId]);
 
   const selectedEntries = entries.filter((e) => selected.has(e.path));
+  const previewable = useMemo(() => entries.filter((e) => !isDirLike(e)), [entries]);
+  const previewIndex = previewPath ? previewable.findIndex((e) => e.path === previewPath) : -1;
+  const previewEntry = previewable[previewIndex] ?? null;
   const hiddenCount = showHidden ? 0 : (listing.data?.entries.length ?? 0) - entries.length;
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["files", serverId] });
@@ -139,12 +148,25 @@ export function FileManager({
     if (list.length) toast(`Downloading ${list.length === 1 ? list[0]!.name : `${list.length} items`}`, { description: "Streaming from the server" });
   };
 
+  const showPreview = (entry: FileEntry) => {
+    setPreviewPath(entry.path);
+    setSelected(new Set([entry.path])); // FileTable scrolls the selected row into view
+  };
+
+  const stepPreview = (dir: 1 | -1) => {
+    const next = previewable[previewIndex + dir];
+    if (next) showPreview(next);
+  };
+
   const onAction = (action: RowAction, entry: FileEntry) => {
     const targets = selected.has(entry.path) && selected.size > 1 ? selectedEntries : [entry];
     switch (action) {
       case "open":
         if (isDirLike(entry)) go(entry.path);
-        else download([entry]);
+        else showPreview(entry);
+        break;
+      case "preview":
+        if (!isDirLike(entry)) showPreview(entry);
         break;
       case "download":
         download(targets);
@@ -283,6 +305,7 @@ export function FileManager({
           />
         ) : (
           <FileTable
+            key={`${serverId}:${current ?? path}`} // a new folder starts scrolled to the top
             entries={entries}
             loading={listing.isLoading}
             selected={selected}
@@ -300,7 +323,7 @@ export function FileManager({
             {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ""}
             {listing.data?.truncated ? " · listing truncated at 20,000 entries" : ""}
           </span>
-          <span className="hidden sm:inline">Drop files or folders to upload · Backspace: up · F2: rename · Del: delete</span>
+          <span className="hidden sm:inline">Drop files or folders to upload · Enter: preview · Backspace: up · F2: rename · Del: delete</span>
         </div>
 
         {selectedEntries.length > 0 ? (
@@ -311,6 +334,9 @@ export function FileManager({
           >
             <span className="tabular px-2.5 font-medium">{selectedEntries.length} selected</span>
             <span className="mx-1 h-5 w-px bg-line" />
+            {selectedEntries.length === 1 && !isDirLike(selectedEntries[0]!) ? (
+              <Button size="sm" variant="ghost" title="Preview (Enter)" onClick={() => showPreview(selectedEntries[0]!)}><ScanEye /> Preview</Button>
+            ) : null}
             <Button size="sm" variant="ghost" onClick={() => download(selectedEntries)}><Download /> Download</Button>
             {selectedEntries.length === 1 ? (
               <Button size="sm" variant="ghost" onClick={() => setDialog({ kind: "rename", entry: selectedEntries[0]! })}><Pencil /> Rename</Button>
@@ -344,6 +370,15 @@ export function FileManager({
           </div>
         ) : null}
       </GlassCard>
+
+      <FilePreviewPanel
+        serverId={serverId}
+        entry={previewEntry}
+        position={previewEntry ? { index: previewIndex, total: previewable.length } : null}
+        onClose={() => setPreviewPath(null)}
+        onStep={stepPreview}
+        onDownload={(e) => download([e])}
+      />
 
       {/* Dialogs */}
       <PromptDialog

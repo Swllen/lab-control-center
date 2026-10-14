@@ -279,6 +279,20 @@ export interface DirListing {
   truncated: boolean;
 }
 
+export interface FilePreview {
+  path: string;
+  name: string;
+  size: number;
+  mtime: number | null;
+  kind: "text" | "binary";
+  /** "utf-8", or "utf-8 (lossy)" when some bytes were not valid UTF-8. */
+  encoding: string | null;
+  content: string | null;
+  bytes_read: number;
+  /** Only the first `bytes_read` bytes of the file are included. */
+  truncated: boolean;
+}
+
 // ---------------------------------------------------------------- terminals
 
 export interface TerminalSession {

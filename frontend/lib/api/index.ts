@@ -1,6 +1,7 @@
 import type {
   ConnectionTestResult,
   DirListing,
+  FilePreview,
   Job,
   JobSpec,
   LogTail,
@@ -124,6 +125,11 @@ export const filesApi = {
   remove: (serverId: number, paths: string[]) =>
     api<void>(`/api/servers/${serverId}/files/delete`, { method: "POST", body: { paths, confirm: true } }),
   downloadUrl: (serverId: number, path: string) => backendUrl(`/api/servers/${serverId}/download?path=${enc(path)}`),
+  /** The first `maxBytes` of a file (server default 1 MiB), decoded when it looks like text. */
+  preview: (serverId: number, path: string, maxBytes?: number) =>
+    api<FilePreview>(`/api/servers/${serverId}/preview?path=${enc(path)}${maxBytes ? `&max_bytes=${maxBytes}` : ""}`),
+  /** Inline image URL for the preview panel (images only, capped at 25 MB, not tracked as a transfer). */
+  previewRawUrl: (serverId: number, path: string) => backendUrl(`/api/servers/${serverId}/preview/raw?path=${enc(path)}`),
   uploadUrl: (serverId: number, dir: string, name: string, overwrite = false) =>
     backendUrl(`/api/servers/${serverId}/upload?dir=${enc(dir)}&name=${enc(name)}${overwrite ? "&overwrite=true" : ""}`),
 };
@@ -135,4 +141,6 @@ export const queryKeys = {
   jobs: (limit?: number) => ["jobs", { limit }] as const,
   transfers: (limit?: number) => ["transfers", { limit }] as const,
   files: (serverId: number, path: string) => ["files", serverId, path] as const,
+  // Nested under ["files", serverId] so refreshing a folder also refreshes an open preview.
+  filePreview: (serverId: number, path: string) => ["files", serverId, "preview", path] as const,
 };

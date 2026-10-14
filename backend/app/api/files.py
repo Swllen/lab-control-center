@@ -2,7 +2,8 @@
 
 Nothing is ever buffered whole in memory: downloads stream 1 MiB SFTP reads straight into the
 HTTP response (with Range support for resume), uploads stream the raw request body into a
-``.lcc-part`` file that is atomically renamed when complete.
+``.lcc-part`` file that is atomically renamed when complete. Previews read only the head of a
+file (text) or a size-capped image, so they never pull a whole multi-GB log into memory.
 """
 
 from __future__ import annotations
@@ -19,13 +20,13 @@ from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from starlette.requests import ClientDisconnect
 
 from app.api.deps import ServerDep
 from app.core.deps import CurrentUser, OperatorUser
 from app.models import Server
-from app.schemas.files import DeleteBody, DirListing, FileEntry, PathBody, RenameBody
+from app.schemas.files import DeleteBody, DirListing, FileEntry, FilePreview, PathBody, RenameBody
 from app.schemas.transfer import TransferOut
 from app.services.sftp_manager import RemoteFileError, SFTPManager
 from app.services.ssh_manager import SSHError
@@ -59,9 +60,9 @@ def _errors():  # type: ignore[no-untyped-def]
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
 
-def _content_disposition(filename: str) -> str:
+def _content_disposition(filename: str, kind: str = "attachment") -> str:
     ascii_name = filename.encode("ascii", "replace").decode().replace('"', "")
-    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+    return f"{kind}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
 
 
 # ---------------------------------------------------------------- browsing
@@ -123,6 +124,131 @@ async def delete(server: ServerDep, body: DeleteBody, request: Request, _: Opera
     with _errors():
         paths = [await sftp.resolve(server, p) for p in body.paths]
         await sftp.delete(server, paths)
+
+
+# ---------------------------------------------------------------- preview
+
+PREVIEW_DEFAULT_BYTES = 1024 * 1024
+PREVIEW_MAX_BYTES = 4 * 1024 * 1024
+PREVIEW_IMAGE_MAX_BYTES = 25 * 1024 * 1024
+
+# Served inline by /preview/raw. Anything else (HTML especially) must never be rendered from the
+# backend origin, where it would run with the user's session cookie.
+_IMAGE_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon", ".avif": "image/avif",
+    ".svg": "image/svg+xml",
+}
+_TEXT_CONTROL = frozenset(b"\t\n\r\f\b\x1b")
+
+
+async def _read_head(sftp: SFTPManager, server: Server, path: str, limit: int) -> bytes:
+    """Read at most ``limit`` bytes from the start of a file."""
+
+    async def op(client: object) -> bytes:
+        buf = bytearray()
+        async with client.open(path, "rb") as f:  # type: ignore[attr-defined]
+            while len(buf) < limit:
+                chunk = await f.read(min(CHUNK, limit - len(buf)), len(buf))
+                if not chunk:
+                    break
+                buf += chunk
+        return bytes(buf)
+
+    return await sftp.run(server, op, path)
+
+
+async def _stat_regular(sftp: SFTPManager, server: Server, path: str):  # type: ignore[no-untyped-def]
+    attrs = await sftp.stat(server, path)
+    if statmod.S_ISDIR(attrs.permissions or 0):
+        raise RemoteFileError(f"Is a directory: {path}")
+    if attrs.permissions is not None and not statmod.S_ISREG(attrs.permissions):
+        # Reading a FIFO or device would block or never end.
+        raise RemoteFileError(f"Not a regular file: {path}")
+    return attrs
+
+
+def _decode_preview(data: bytes, truncated: bool) -> tuple[str | None, str | None]:
+    """Return ``(text, encoding)``, or ``(None, None)`` when the bytes look binary."""
+    if b"\x00" in data[:8192]:
+        return None, None
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError as exc:
+        # A multi-byte character cut in half by the read limit is not a sign of binary data.
+        if truncated and exc.start >= len(data) - 3:
+            with contextlib.suppress(UnicodeDecodeError):
+                return data[: exc.start].decode("utf-8"), "utf-8"
+    sample = data[:65536]
+    odd = sum(1 for b in sample if (b < 32 and b not in _TEXT_CONTROL) or b == 127)
+    if odd > len(sample) * 0.05:
+        return None, None
+    text = data.decode("utf-8", errors="replace")
+    if text.count("\ufffd") > len(text) * 0.1:
+        return None, None
+    return text, "utf-8 (lossy)"
+
+
+@router.get("/preview", response_model=FilePreview)
+async def preview(
+    server: ServerDep,
+    request: Request,
+    _: CurrentUser,
+    path: Annotated[str, Query(min_length=1, max_length=4096)],
+    max_bytes: Annotated[int, Query(ge=1024, le=PREVIEW_MAX_BYTES)] = PREVIEW_DEFAULT_BYTES,
+) -> FilePreview:
+    """The first ``max_bytes`` of a file, decoded as text when it looks like text."""
+    _require_ssh(server)
+    sftp = _sftp(request)
+    with _errors():
+        resolved = await sftp.resolve(server, path)
+        attrs = await _stat_regular(sftp, server, resolved)
+        data = await _read_head(sftp, server, resolved, max_bytes + 1)
+    truncated = len(data) > max_bytes
+    data = data[:max_bytes]
+    content, encoding = _decode_preview(data, truncated)
+    return FilePreview(
+        path=resolved,
+        name=posixpath.basename(resolved),
+        size=max(attrs.size or 0, len(data)),
+        mtime=attrs.mtime,
+        kind="text" if content is not None else "binary",
+        encoding=encoding,
+        content=content,
+        bytes_read=len(data),
+        truncated=truncated,
+    )
+
+
+@router.get("/preview/raw")
+async def preview_raw(
+    server: ServerDep, request: Request, _: CurrentUser, path: Annotated[str, Query(min_length=1, max_length=4096)]
+) -> Response:
+    """An image served inline for the preview panel (not tracked as a transfer)."""
+    _require_ssh(server)
+    sftp = _sftp(request)
+    with _errors():
+        resolved = await sftp.resolve(server, path)
+        media = _IMAGE_TYPES.get(posixpath.splitext(resolved)[1].lower())
+        if media is None:
+            raise RemoteFileError("Only images can be previewed inline", 415)
+        attrs = await _stat_regular(sftp, server, resolved)
+        etag = f'"{attrs.mtime or 0}-{attrs.size or 0}"'
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        if (attrs.size or 0) > PREVIEW_IMAGE_MAX_BYTES:
+            raise RemoteFileError("Image is too large to preview; download it instead", 413)
+        data = await _read_head(sftp, server, resolved, PREVIEW_IMAGE_MAX_BYTES + 1)
+    if len(data) > PREVIEW_IMAGE_MAX_BYTES:
+        raise HTTPException(413, "Image is too large to preview; download it instead")
+    headers |= {
+        "Content-Disposition": _content_disposition(posixpath.basename(resolved), "inline"),
+        "X-Content-Type-Options": "nosniff",
+        # SVG can carry script: keep anything opened directly from this URL inert.
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    }
+    return Response(data, media_type=media, headers=headers)
 
 
 # ---------------------------------------------------------------- download
