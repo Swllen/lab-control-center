@@ -32,6 +32,13 @@ npm install
 npm run dev
 ```
 
+### Access from other machines on the LAN
+
+1. Start the backend with `--host 0.0.0.0` (`uv run uvicorn app.main:app --host 0.0.0.0 --port 8600 --reload`).
+2. Add `http://<LAN-IP>:3000` to `LCC_ALLOWED_ORIGINS` in `backend/.env`, and `<LAN-IP>` to `LCC_DEV_ORIGINS` in `frontend/.env.local` (dev mode only).
+3. Allow inbound TCP 3000 and 8600 in the firewall (Private network only).
+4. Open `http://<LAN-IP>:3000` from the other machine. Change the default admin password first: anyone on the network can reach the login page.
+
 Sign in as `admin` with `LCC_ADMIN_PASSWORD` (if unset, a random password is written to `backend/data/`). With `LCC_DEMO_MODE=true`, a fresh database is seeded with two **simulated** servers plus sample jobs and transfers.
 
 ## Adding a real server
