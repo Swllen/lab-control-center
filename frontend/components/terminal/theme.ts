@@ -7,6 +7,9 @@ export const TERMINAL_FONT =
 export const TERMINAL_THEME: ITheme = {
   background: "#0f1624",
   foreground: "#d6dfec",
+  scrollbarSliderBackground: "#64748b80",
+  scrollbarSliderHoverBackground: "#94a3b8b3",
+  scrollbarSliderActiveBackground: "#7ea6ffcc",
   cursor: "#7ea6ff",
   cursorAccent: "#0f1624",
   selectionBackground: "#3b6cff55",

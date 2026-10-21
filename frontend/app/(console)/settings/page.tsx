@@ -2,8 +2,13 @@
 
 import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useEffect, useState, type ReactNode } from "react";
 import { CardHeader, GlassCard } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Field, Input } from "@/components/ui/input";
+import { authApi, queryKeys } from "@/lib/api";
 import { Kbd } from "@/components/ui/misc";
 import { NAV_ITEMS } from "@/components/layout/nav";
 import { AiSettings } from "@/components/settings/ai-settings";
@@ -22,6 +27,18 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { data: user } = useMe();
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<{ username: string; display_name: string } | null>(null);
+  const profile = draft ?? { username: user?.username ?? "", display_name: user?.display_name ?? "" };
+  const changed = !!user && (profile.username.trim() !== user.username || profile.display_name.trim() !== user.display_name);
+  const saveProfile = useMutation({
+    mutationFn: () => authApi.updateMe({ username: profile.username.trim(), display_name: profile.display_name.trim() }),
+    onSuccess: (updated) => {
+      qc.setQueryData(queryKeys.me, updated);
+      setDraft(null);
+      toast.success("Account updated");
+    },
+  });
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -54,11 +71,20 @@ export default function SettingsPage() {
 
       <GlassCard className="pb-3">
         <CardHeader title="Account" />
-        <div className="px-6">
-          <Row label="Username">{user?.username}</Row>
-          <Row label="Display name">{user?.display_name}</Row>
+        <form className="space-y-3 px-6" onSubmit={(e) => { e.preventDefault(); if (changed && profile.username.trim() && !saveProfile.isPending) saveProfile.mutate(); }}>
+          <Field label="Username" htmlFor="account-username" hint="Use the new username the next time you sign in.">
+            <Input id="account-username" autoComplete="username" required maxLength={64} value={profile.username} disabled={!user || saveProfile.isPending} onChange={(e) => { setDraft({ ...profile, username: e.target.value }); saveProfile.reset(); }} />
+          </Field>
+          <Field label="Display name" htmlFor="account-display-name">
+            <Input id="account-display-name" autoComplete="nickname" maxLength={128} value={profile.display_name} disabled={!user || saveProfile.isPending} onChange={(e) => { setDraft({ ...profile, display_name: e.target.value }); saveProfile.reset(); }} />
+          </Field>
           <Row label="Role"><span className="capitalize">{user?.role}</span></Row>
-        </div>
+          {saveProfile.error ? <p role="alert" className="text-[13px] text-danger">{saveProfile.error.message}</p> : null}
+          <div className="flex justify-end gap-2 pb-2">
+            <Button type="button" variant="ghost" disabled={!changed || saveProfile.isPending} onClick={() => { setDraft(null); saveProfile.reset(); }}>Cancel</Button>
+            <Button type="submit" disabled={!changed || !profile.username.trim() || saveProfile.isPending}>{saveProfile.isPending ? "Saving…" : "Save changes"}</Button>
+          </div>
+        </form>
       </GlassCard>
 
       <AiSettings isAdmin={user?.role === "admin"} />

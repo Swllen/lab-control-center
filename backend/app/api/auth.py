@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.core.deps import CurrentUser, DbSession
 from app.core.security import SESSION_COOKIE, create_session_token, verify_password
 from app.models import User
-from app.schemas.auth import LoginRequest, UserOut
+from app.schemas.auth import LoginRequest, ProfileUpdate, UserOut
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -37,4 +38,20 @@ async def logout(response: Response) -> None:
 
 @router.get("/me", response_model=UserOut)
 async def me(user: CurrentUser) -> User:
+    return user
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_me(body: ProfileUpdate, user: CurrentUser, db: DbSession) -> User:
+    existing = await db.scalar(select(User.id).where(User.username == body.username, User.id != user.id))
+    if existing is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Username is already in use")
+    user.username = body.username
+    user.display_name = body.display_name
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Username is already in use") from exc
+    await db.refresh(user)
     return user

@@ -6,6 +6,7 @@ import { ApiError } from "@/lib/api";
 import { useMe } from "@/lib/hooks/queries";
 import { setUnauthorizedHandler } from "@/lib/metrics-store";
 import { UploadPanel } from "@/components/files/upload-panel";
+import { Button } from "@/components/ui/button";
 import { CommandPalette } from "./command-palette";
 import { NAV_ITEMS } from "./nav";
 import { Sidebar } from "./sidebar";
@@ -17,7 +18,7 @@ function isTypingTarget(el: EventTarget | null): boolean {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { data: user, error, isLoading } = useMe();
+  const { data: user, error, isLoading, isFetching, refetch } = useMe();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const chord = useRef<number>(0);
 
@@ -53,6 +54,18 @@ export function AppShell({ children }: { children: ReactNode }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [router]);
+
+  // A non-401 failure (backend down, proxy error) would otherwise leave the spinner up forever.
+  if (error && !(error instanceof ApiError && error.status === 401) && !isFetching) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <div className="space-y-3 text-center">
+          <p className="text-sm text-muted">Cannot reach the backend: {error.message}</p>
+          <Button variant="primary" onClick={() => refetch()}>Retry</Button>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading || !user) {
     return (

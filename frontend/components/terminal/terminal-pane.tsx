@@ -1,7 +1,7 @@
 "use client";
 
-import { Copy, Layers, Maximize2, Minimize2, RotateCw, X } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { Copy, History, Layers, Maximize2, Minimize2, RotateCw, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader } from "@/components/ui/dialog";
 import { terminalsApi } from "@/lib/api";
@@ -18,6 +18,37 @@ const STATE_STYLE: Record<ConnState, { dot: string; label: string }> = {
   exited: { dot: "bg-slate-500", label: "Exited" },
   error: { dot: "bg-rose-400", label: "Error" },
 };
+
+function TerminalHistory({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const scrollRef = useRef<HTMLPreElement>(null);
+  const [result, setResult] = useState<{ text?: string; error?: string }>({});
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setResult({});
+    void terminalsApi.history(sessionId).then(
+      ({ text }) => { if (!cancelled) setResult({ text }); },
+      (error: unknown) => { if (!cancelled) setResult({ error: error instanceof Error ? error.message : "Could not load history" }); },
+    );
+    return () => { cancelled = true; };
+  }, [sessionId, version]);
+  useEffect(() => {
+    if (result.text !== undefined && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [result.text]);
+  return (
+    <aside className="flex min-h-0 w-1/2 min-w-0 flex-col border-l border-white/10" aria-label="Tmux history" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="flex shrink-0 items-center gap-1 px-2 py-1 text-xs text-slate-300">
+        <span className="mr-auto">History · last 10,000 lines</span>
+        <HeaderButton label="Refresh history" onClick={() => setVersion((v) => v + 1)}><RotateCw /></HeaderButton>
+        <HeaderButton label="Close history" onClick={onClose}><X /></HeaderButton>
+      </div>
+      <pre ref={scrollRef} tabIndex={0} className="min-h-0 flex-1 overflow-x-auto overflow-y-scroll whitespace-pre p-3 font-mono text-xs leading-relaxed text-slate-300 [scrollbar-color:#64748b_#141d2e] [scrollbar-width:auto]" aria-label="Scrollable terminal history">
+        {result.error ?? result.text ?? "Loading history…"}
+      </pre>
+      <button type="button" className="shrink-0 border-t border-white/10 py-2 text-xs text-slate-300 hover:bg-white/10" onClick={() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }}>Jump to bottom</button>
+    </aside>
+  );
+}
 
 function HeaderButton({ label, onClick, children, danger }: { label: string; onClick: () => void; children: ReactNode; danger?: boolean }) {
   return (
@@ -55,6 +86,7 @@ export function TerminalPane({
   const [state, setState] = useState<{ s: ConnState; detail?: string }>({ s: "connecting" });
   const [editing, setEditing] = useState(false);
   const [askTmux, setAskTmux] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const style = STATE_STYLE[state.s];
 
   const close = (killTmux = false) => {
@@ -129,6 +161,9 @@ export function TerminalPane({
           {state.detail ? ` · ${state.detail}` : ""}
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {pane.tmux && pane.sessionId ? (
+            <HeaderButton label="Scroll tmux history" onClick={() => setHistoryOpen((open) => !open)}><History /></HeaderButton>
+          ) : null}
           <HeaderButton label="Reconnect" onClick={() => xterm.current?.reconnect()}><RotateCw /></HeaderButton>
           <HeaderButton label="Duplicate" onClick={() => workspace.duplicatePane(pane.id)}><Copy /></HeaderButton>
           <HeaderButton label={maximized ? "Restore" : "Maximize"} onClick={() => workspace.toggleMaximize(tabId, pane.id)}>
@@ -137,8 +172,11 @@ export function TerminalPane({
           <HeaderButton label="Close" onClick={() => (hasTmux(pane) ? setAskTmux(true) : close())} danger><X /></HeaderButton>
         </div>
       </header>
-      <div className="min-h-0 flex-1 py-1.5 pl-2.5 pr-1">
+      <div className="flex min-h-0 flex-1">
+      <div className="min-h-0 min-w-0 flex-1 py-1.5 pl-2.5 pr-1">
         <XtermView ref={xterm} paneId={pane.id} focused={focused} onFocus={onFocus} onState={(s, detail) => setState({ s, detail })} />
+      </div>
+      {historyOpen && pane.sessionId ? <TerminalHistory sessionId={pane.sessionId} onClose={() => setHistoryOpen(false)} /> : null}
       </div>
 
       <Dialog open={askTmux} onOpenChange={setAskTmux}>

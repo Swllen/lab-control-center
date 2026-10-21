@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shlex
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 
@@ -173,6 +174,26 @@ async def rename_terminal(session_id: str, body: TerminalRename, request: Reques
     session = _owned(_manager(request), session_id, user)
     session.name = body.name
     return _out(session)
+
+
+@router.get("/api/terminals/{session_id}/history")
+async def terminal_history(session_id: str, request: Request, user: OperatorUser, db: DbSession) -> dict[str, str]:
+    manager = _manager(request)
+    session = _owned(manager, session_id, user)
+    if not session.tmux:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This terminal does not use tmux")
+    server = await _shell_server(session.server_id, db)
+    # Exact session matching; capture the active pane without entering copy mode or sending keys.
+    target = shlex.quote("=" + session.tmux + ":")
+    failure_marker = "__LCC_HISTORY_UNAVAILABLE__"
+    command = f"tmux capture-pane -p -S -10000 -t {target} || printf '\\n{failure_marker}'"
+    try:
+        text = await manager.run(server, _account(server, session.account), command)
+    except Exception as exc:
+        raise _remote_error(exc) from exc
+    if text.endswith(failure_marker):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not read tmux history; the session may have ended")
+    return {"text": text}
 
 
 @router.delete("/api/terminals/{session_id}", status_code=status.HTTP_204_NO_CONTENT)

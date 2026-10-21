@@ -24,6 +24,8 @@ import { api, backendUrl } from "./client";
 export { ApiError, backendUrl, wsUrl } from "./client";
 
 export const authApi = {
+  updateMe: (body: { username: string; display_name: string }) =>
+    api<User>("/api/auth/me", { method: "PATCH", body }),
   me: () => api<User>("/api/auth/me"),
   login: (username: string, password: string) =>
     api<User>("/api/auth/login", { method: "POST", body: { username, password } }),
@@ -48,6 +50,7 @@ export const serversApi = {
 };
 
 export const terminalsApi = {
+  history: (id: string) => api<{ text: string }>(`/api/terminals/${id}/history`),
   list: () => api<TerminalSession[]>("/api/terminals"),
   accounts: () => api<TerminalAccount[]>("/api/terminals/accounts"),
   create: (body: {
