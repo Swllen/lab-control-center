@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.api import assistant, auth, files, jobs, metrics, servers, terminals, transfers
+from app.api import assistant, auth, files, jobs, metrics, processes, quotas, servers, terminals, transfers
 from app.config import get_settings
 from app.db.init_db import create_schema, ensure_admin, seed_demo
 from app.db.session import SessionLocal, engine
@@ -78,7 +78,7 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "Cross-origin request rejected"}, status_code=403)
         return await call_next(request)
 
-    for module in (auth, servers, metrics, terminals, files, jobs, transfers, assistant):
+    for module in (auth, servers, metrics, terminals, files, jobs, transfers, assistant, quotas, processes):
         app.include_router(module.router)
 
     @app.get("/api/health", tags=["meta"])
