@@ -15,10 +15,10 @@ be root or be allowed to run this **exact read-only command** without a password
 
 If the installed path differs, use the path displayed in the panel. An administrator
 can use `sudo visudo -f /etc/sudoers.d/lcc-quota` to add a rule like the following,
-replacing `shuwenxue` with the configured server's SSH username:
+replacing `labuser` with the configured server's SSH username:
 
 ```sudoers
-shuwenxue ALL=(root) NOPASSWD: /usr/sbin/repquota -a -u -n -p -v -O xml
+labuser ALL=(root) NOPASSWD: /usr/sbin/repquota -a -u -n -p -v -O xml
 ```
 
 Then test as that SSH user:

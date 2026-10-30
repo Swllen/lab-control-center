@@ -1,113 +1,207 @@
 # Lab Server Control Center
 
-A web control plane for Linux GPU servers used in AI research: live hardware monitoring, and later web terminals, an SFTP file manager, transfers, and a GPU-aware experiment queue.
+A browser-based control center for Linux GPU servers: hardware monitoring, SSH/tmux
+terminals, SFTP files and transfers, GPU-aware experiment queues, disk quotas and processes.
+The backend connects over SSH; no persistent management agent is installed remotely.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, data models, API, and phased plan.
+[中文说明](README.zh-CN.md) · [Job guide](docs/JOBS.md) ·
+[Quota setup](docs/QUOTAS.md) · [Architecture](docs/ARCHITECTURE.md) · [Security](SECURITY.md)
 
-**Disk Quotas:** administrators can view per-user, per-filesystem usage, soft/hard
-space and inode limits, and grace periods in the sidebar. See
-[docs/QUOTAS.md](docs/QUOTAS.md) for the read-only SSH permission setup.
+## Features
 
-**Processes:** administrators can view all processes visible to the configured SSH
-login, search commands/PIDs/users, filter states and users, and sort by CPU, RSS or
-runtime. The panel refreshes every 10 seconds while open (can be paused), caches SSH
-snapshots for 5 seconds, and paginates at 100 rows. CPU is sampled over about half a
-second, with 100% representing one core. Linux `/proc`, procps `ps`, and Python 3
-are required; no sudo is used. It does not stop or modify processes. Deploying the
-new API requires one backend restart, which disconnects plain-shell terminals.
+| Area | Available functionality |
+|---|---|
+| Monitoring | CPU/RAM, per-GPU utilization/VRAM/temperature, disks, network and history |
+| Terminals | Tabs, split panes, optional tmux, reattach and tmux history |
+| Files | SFTP operations, uploads/downloads, previews of text/code, JSON/JSONL, Markdown, CSV and images |
+| Transfers | Streaming and server-to-server transfers, progress, cancel/retry |
+| Jobs | Wait for idle GPUs, auto-assign or select specific GPUs, YAML sweeps, logs, cancel/retry/duplicate |
+| Job history | Bulk-delete finished records with confirmation; active jobs are protected |
+| Quotas | Admin-only per-user filesystem usage, soft/hard space/inode limits and grace periods |
+| Processes | Admin-only snapshots across users, CPU/RSS/runtime sorting, search and filters |
+| Settings | Appearance, account profile, AI assistant and copyable LAN addresses |
+| Extras | Animated server mascots driven by existing telemetry |
 
-## Status
+The **Logs** page is still a placeholder for a unified timeline. Individual job logs
+and frontend access logs work. Notifications, token approval, MFA and a comprehensive
+audit trail are not implemented.
 
-| Phase | Scope | State |
-|---|---|---|
-| 1 | Scaffold, auth, server config and connection test, SSH pool, real-time metrics, dashboard, servers, hardware | ✅ done |
-| 2 | xterm.js terminals: tabs, 1×1 / 1×2 / 2×2 splits, reconnect/duplicate/maximize, refresh-safe sessions | ✅ done |
-| 3 | SFTP file manager (tree, breadcrumbs, drag-and-drop, rename/move/delete), streaming upload/download with Range resume, server-to-server copy, live transfers with cancel/retry | ✅ done |
-| 4 | Job queue (create/cancel/retry/duplicate, live logs, progress), YAML parameter sweeps, GPU-aware scheduler | ✅ done |
-| 5 | Logs, notifications, preferences polish | planned |
+## Requirements
 
-## Run (development)
+- Control-center host: Python **3.12+**, [uv](https://docs.astral.sh/uv/), Node.js
+  **20.9+** and npm. Local validation uses Node.js 24. The double-click launchers need Windows.
+- Remote Linux hosts: SSH and Python 3. The main telemetry probe supports Python
+  3.6+; optional quota/process probes require Python 3.7+.
+- GPU monitoring: NVIDIA drivers with `nvidia-smi`; `nvidia-ml-py` is optional.
+- Optional remote tools: `tmux` for persistent shells; procps `ps` and `/proc` for
+  processes; quota-tools `repquota` with active user quotas for quota reports.
+- Jobs need `setsid` and standard Linux shell utilities.
 
-On Windows, after installing the dependencies once, double-click **start.cmd** in
-the repository root. It starts both services in the background and opens the login
-page when ready. Running services are reused; it never kills or restarts an existing
-backend or terminal session. New services bind to localhost by default. Use
-`start.cmd -Lan` for LAN binding (the origin/firewall settings below are still required).
-The backend runs without auto-reload to avoid disconnecting terminals on code changes.
-Startup output is saved under `logs/`; frontend access records are in `frontend/logs/`.
-If the frontend was already running, restart it manually once to enable new logging
-code. `start.cmd -CheckOnly` checks setup without starting/stopping services;
-`start.cmd -NoBrowser` starts services without opening a browser.
+## First-time setup
 
-Requirements: [uv](https://docs.astral.sh/uv/) and Node 20+.
+```sh
+git clone https://github.com/Swllen/lab-control-center.git
+cd lab-control-center/backend
+cp .env.example .env
+uv sync
+cd ../frontend
+cp .env.example .env.local
+npm ci
+```
 
-```bash
-# backend → http://127.0.0.1:8600
+These commands work in PowerShell and POSIX shells. Edit `backend/.env` before
+first startup. Leave `LCC_ADMIN_PASSWORD` empty to generate a random initial
+password, or set a strong unique password. The initial username defaults to `admin`.
+Generated credentials are written to `backend/data/initial_admin_password.txt`.
+
+Bootstrap runs **only if there are no users**. Editing `LCC_ADMIN_PASSWORD` later
+does not reset an existing account. If you rename the account in Settings, use the
+new username next time. Keep credential files private.
+
+## Windows startup
+
+| Command / double-click launcher | Behavior |
+|---|---|
+| `start.cmd` | Local-only services; open the browser |
+| `start-lan.cmd` | LAN services; open the browser |
+| `start.cmd -CheckOnly` | Check setup without starting/stopping services |
+| `start.cmd -NoBrowser` | Start without opening a browser |
+
+Open <http://localhost:3000>. Services run in the background, with output in `logs/`.
+The launcher **reuses running services**, never kills them, and starts the backend
+without auto-reload. Saving code therefore does not unexpectedly disconnect terminals.
+
+### Another computer on the LAN
+
+1. Use `start-lan.cmd`. Stop previously started localhost-only services first;
+   the launcher does not reconfigure an existing process.
+2. In **Settings → 局域网访问**, copy the physical network address, for example
+   `http://192.168.1.20:3000` (example only).
+3. Open that address on the other computer and sign in with a control-center account.
+
+LAN startup binds new services to all interfaces and adds detected private IPv4
+addresses to allowed origins **for that launch**, preserving existing origins.
+It does not edit env files or the firewall. Ports **3000 and 8600** must both be
+reachable: REST uses the frontend proxy, while WebSockets and large file streams
+use the backend directly. Restrict firewall rules to trusted peers/networks.
+Displaying an address does not prove remote connectivity; Wi-Fi isolation can block it.
+
+## Manual startup
+
+Run in separate terminals:
+
+```sh
 cd backend
-cp .env.example .env      # then edit it (works in PowerShell too; avoid `echo > .env`, which writes UTF-16 there)
-uv run uvicorn app.main:app --port 8600 --reload
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8600
 ```
 
-```bash
-# frontend → http://localhost:3000
+```sh
 cd frontend
-npm install
-npm run dev
+npm run dev -- --hostname 127.0.0.1
 ```
 
-### Frontend access logs
+For manual LAN access, bind both services to `0.0.0.0`. Add `http://<LAN-IP>:3000`
+to the JSON array `LCC_ALLOWED_ORIGINS` in `backend/.env`, and the bare IP to the
+comma-separated `LCC_DEV_ORIGINS` in `frontend/.env.local`. Restart affected services.
+Backend `--reload` is optional for development, but reloads disconnect plain shells.
 
-`npm run dev` and `npm start` log incoming HTTP requests to the terminal with an
-`[access]` prefix and to `frontend/logs/access-YYYY-MM-DD.jsonl`. Each record includes
-the UTC date/time, actual socket peer IP and port, method, path, status, duration and
-User-Agent. Forwarded IP headers are recorded separately and are not trusted. Queries,
-cookies and request bodies are not logged. Daily files are capped at 10 MiB; console
-logging continues after the cap. Log files are local and ignored by Git; remove old
-daily files periodically. WebSocket traffic is not included.
+## Add a server
 
-Obvious probes for unrelated PHP/JSP/CGI applications, path traversal and Server Actions
-(this app uses REST) receive a plain 404 before reaching Next.js. This reduces scan
-overhead but does not replace a firewall or authentication. Existing logs cannot reveal
-source addresses or dates that were never recorded. Restart only the frontend once to
-activate this launcher; the backend does not need restarting. Launching `next dev`
-directly bypasses the launcher and its logging/filtering.
+1. Connect from the control-center host using `ssh labuser@your-server` and verify
+   the host key, creating `~/.ssh/known_hosts` before adding the server.
+2. In **Servers**, enter the host, port, SSH username and key path, or import an
+   alias from `~/.ssh/config`. A missing explicit key uses the SSH agent.
+3. Test and save. Install optional remote tools only for features you use.
 
-### Access from other machines on the LAN
+Web users operate through the configured SSH login, not automatically through their
+own Linux accounts. Only grant access to people trusted with those remote permissions.
 
-1. Start the backend with `--host 0.0.0.0` (`uv run uvicorn app.main:app --host 0.0.0.0 --port 8600 --reload`).
-2. Add `http://<LAN-IP>:3000` to `LCC_ALLOWED_ORIGINS` in `backend/.env`, and `<LAN-IP>` to `LCC_DEV_ORIGINS` in `frontend/.env.local` (dev mode only).
-3. Allow inbound TCP 3000 and 8600 in the firewall (Private network only).
-4. Open `http://<LAN-IP>:3000` from the other machine. Change the default admin password first: anyone on the network can reach the login page.
+## Jobs and everyday use
 
-Sign in as `admin` with `LCC_ADMIN_PASSWORD` (if unset, a random password is written to `backend/data/`). With `LCC_DEMO_MODE=true`, a fresh database is seeded with two **simulated** servers plus sample jobs and transfers.
+- **Jobs:** set server, working directory, command and GPU count. **0 means CPU-only.**
+  Choose **Select GPUs** to pin physical indices; all selected cards must become free.
+  [Job guide](docs/JOBS.md) covers conda, sweeps, progress and troubleshooting.
+- **Cancel versus delete:** Cancel stops the job and keeps history. Select finished
+  records and choose **Delete selected** to remove history; remote output remains.
+- **Terminals:** Use tmux for persistence. Missing remote tmux falls back to a plain
+  shell. Plain shells do not survive backend restarts; tmux sessions can be reattached.
+- **Files:** double-click to preview. Large text is truncated; download the full file
+  when needed. Large directories render visible rows rather than every row at once.
+- **Quotas:** usage is charged to file owners across each filesystem, not just home
+  directories. See [quota permissions](docs/QUOTAS.md) for the exact read-only sudo rule.
+- **Processes:** shows processes visible to the SSH login. CPU is sampled over about
+  0.5 seconds; 100% means one core. The panel is read-only and refreshes every 10 seconds.
 
-## Adding a real server
+## Configuration
 
-1. On the machine that runs the backend, make sure `ssh user@host` already works with a key in `~/.ssh`. This also puts the host key in `known_hosts`, which is verified by default.
-2. **Servers → Add server**: enter the hostname, user, and key path (for example `~/.ssh/id_ed25519`), or leave the key path empty to use ssh-agent. Click **Test connection**, then save.
-3. The remote server only needs `python3`. GPU metrics use `pynvml` (`pip install nvidia-ml-py`) when it's installed, otherwise `nvidia-smi`.
-4. Restart and shutdown need passwordless sudo for `systemctl reboot` / `systemctl poweroff`.
+See [backend settings](backend/app/config.py) and both `.env.example` files.
 
-## Configuration (backend env, prefix `LCC_`)
+| Backend variable | Default / meaning |
+|---|---|
+| `LCC_ADMIN_USERNAME`, `LCC_ADMIN_PASSWORD` | First-user bootstrap; default username `admin`, random password when empty |
+| `LCC_DATABASE_URL` | SQLite under `backend/data/lcc.db` |
+| `LCC_ALLOWED_ORIGINS` | JSON list; localhost/127.0.0.1 on port 3000 by default |
+| `LCC_SSH_KEY_DIRS` | JSON list of allowed private-key directories, default `["~/.ssh"]` |
+| `LCC_SSH_KNOWN_HOSTS` | `auto`, `ignore`, or explicit known_hosts path; verify hosts before use |
+| `LCC_METRICS_INTERVAL_S` | 2 seconds |
+| `LCC_SCHEDULER_INTERVAL_S` | 5 seconds |
+| `LCC_GPU_FREE_MAX_MEM_FRAC` | Idle threshold: VRAM usage ≤0.10 |
+| `LCC_GPU_FREE_MAX_UTIL` | Idle threshold: GPU utilization ≤15% |
+| `LCC_DEMO_MODE` | Code default `true`; example env sets `false` |
+| `LCC_COOKIE_SECURE` | Default `false` for local HTTP; configure for HTTPS deployment |
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `LCC_DATABASE_URL` | `sqlite+aiosqlite:///backend/data/lcc.db` | Any SQLAlchemy async URL (e.g. `postgresql+asyncpg://…`) |
-| `LCC_ADMIN_PASSWORD` | random | Initial admin password (first run only) |
-| `LCC_SSH_KEY_DIRS` | `["~/.ssh"]` | Directories that key paths must resolve into |
-| `LCC_SSH_KNOWN_HOSTS` | `auto` | `auto`, `ignore`, or a path |
-| `LCC_METRICS_INTERVAL_S` | `2.0` | Probe sampling interval |
-| `LCC_ALLOWED_ORIGINS` | localhost:3000 | CORS and WebSocket origin allow-list |
-| `LCC_DEMO_MODE` | `true` | Seed simulated servers into an empty DB |
+Frontend env: `LCC_BACKEND_URL` is the server-side REST proxy target;
+`NEXT_PUBLIC_LCC_WS_PORT` is the browser-facing backend port (default 8600);
+`LCC_DEV_ORIGINS` allows additional development-server hosts. AI credentials can
+be set in Settings or via backend env variables.
 
-The frontend reads `LCC_BACKEND_URL` (REST proxy target) and `NEXT_PUBLIC_LCC_WS_PORT` (WebSocket port). See `frontend/.env.example`.
+## Data, logs and backups
 
-## Jobs and sweeps
+| Location | Contents |
+|---|---|
+| `backend/data/lcc.db` | Password hashes, servers, jobs and transfer records |
+| `backend/data/secret_key` | Session signing secret |
+| `backend/data/ai_api_key`, `ai_config.json` | Locally configured AI provider credentials/settings |
+| `backend/data/backups/` | Local database backups, if created |
+| `logs/` | Timestamped launcher stdout/stderr |
+| `frontend/logs/access-YYYY-MM-DD.jsonl` | UTC request time, socket peer, path, status and User-Agent |
+| Remote `~/.lcc/jobs/<id>/` | Job script, stdout/stderr, PID, exit status and optional progress |
 
-- Each job runs detached on the server (`setsid -f`, which needs util-linux 2.31 or newer) from `~/.lcc/jobs/<id>/run.sh`, under `bash -l`. It survives SSH drops and control-center restarts. `stdout.log`, `stderr.log`, `exit_code` and `pid` are written to that folder.
-- The scheduler checks every 5 s. A queued job starts when the server is below `max_jobs` **and** enough GPUs are idle: not assigned to another control-center job, under 10 % memory and under 15 % utilization (`LCC_GPU_FREE_MAX_MEM_FRAC`, `LCC_GPU_FREE_MAX_UTIL`). Queued jobs are taken in order, but a smaller job further back can start first when the first one doesn't fit. The chosen GPUs are exported as `CUDA_VISIBLE_DEVICES`. CPU-only jobs get an empty value.
-- **Progress:** write `0.42` or `42%` to `$LCC_PROGRESS_FILE`.
-- **Cancel** sends SIGTERM to the job's process group, then SIGKILL after 10 s.
-- **Sweeps:** YAML `parameters:` mapping → cartesian product. `{name}` placeholders are substituted; parameters the command doesn't reference are appended as `--name=value`.
-- **Conda:** a non-interactive login shell does not run the conda hook from `.bashrc`, so start commands with `source ~/miniconda3/etc/profile.d/conda.sh && conda activate <env> && …`.
-- The scheduler implements a `Scheduler` protocol (`app/services/job_scheduler.py`), so a Slurm backend can replace it.
+Training artifacts use the output paths configured in your command. Use SQLite's
+backup facility for a running database, or stop the backend before copying it;
+copying only a live `.db` can miss WAL changes. All data/env/log files are private
+and ignored by Git, but **not** automatically excluded from manual ZIP archives.
+
+Access files stop growing at 10 MiB per UTC day; console output continues. Old files
+are not removed automatically. Queries, cookies and bodies are not logged. Forwarded
+IP headers are diagnostic, not trusted identity. WebSockets are not in access logs.
+The access logger/scan filter requires `npm run dev` or `npm start`; invoking `next`
+directly bypasses the launcher. This filter is not a WAF or an authentication gate.
+
+## Validation
+
+```sh
+cd backend
+uv run python -m unittest discover -s tests
+cd ../frontend
+npm run typecheck
+node --test scripts/request-guard.test.cjs scripts/jobs-bulk-delete.test.cjs
+```
+
+Build with `npm run build`, then serve with `npm start`. Do not build into the same
+`.next` directory as a running dev server. Public deployment additionally needs a
+considered HTTPS/reverse-proxy/WebSocket, authentication and firewall configuration.
+The LAN launcher is not a public hosting setup.
+
+## Current limits
+
+- Scheduling uses sampled metrics and cooperative reservations, not system-wide
+  GPU locks; manually launched processes can compete for the same cards.
+- No token approval, MFA, login rate limiting, notifications or full user-management UI.
+- The unified Logs page is a placeholder; job logs and access files are separate.
+- SQLite upgrades use additive startup migrations. Other database engines need their
+  driver and a migration plan; portability is not a tested deployment guarantee.
+- Demo mode seeds an empty server database; simulated hosts cannot run real jobs or
+  provide real files, quotas or process reports.
+
+Read [SECURITY.md](SECURITY.md) before exposing an instance outside a trusted environment.
