@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 JobStatusLiteral = Literal["queued", "running", "completed", "failed", "canceled"]
 
@@ -28,6 +28,16 @@ class JobSpec(BaseModel):
     command: str = Field(min_length=1, max_length=20_000)
     env: dict[str, str] = Field(default_factory=dict)
     gpus: int = Field(default=0, ge=0, le=16, description="Number of GPUs; assigned via CUDA_VISIBLE_DEVICES")
+    requested_gpu_indices: list[Annotated[int, Field(ge=0, strict=True)]] | None = Field(default=None, max_length=16)
+
+    @model_validator(mode="after")
+    def _gpu_selection(self):
+        if self.requested_gpu_indices is not None:
+            if not self.requested_gpu_indices or len(set(self.requested_gpu_indices)) != len(self.requested_gpu_indices):
+                raise ValueError("Select at least one GPU, without duplicate indices")
+            if len(self.requested_gpu_indices) != self.gpus:
+                raise ValueError("GPU count must match the number of selected GPUs")
+        return self
 
     _env = field_validator("env")(lambda v: _check_env(v))
 
@@ -74,6 +84,7 @@ class JobOut(BaseModel):
     env: dict[str, str]
     params: dict[str, Any]
     gpus_requested: int
+    requested_gpu_indices: list[int] | None = None
     gpu_indices: list[int] | None
     status: JobStatusLiteral
     progress: float | None
@@ -99,6 +110,7 @@ class LogTail(BaseModel):
 
 
 class ServerQueueStatus(BaseModel):
+    supports_gpu_selection: bool = True
     server_id: int
     max_jobs: int
     running: int

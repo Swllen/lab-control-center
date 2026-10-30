@@ -43,6 +43,7 @@ class Job(TimestampMixin, Base):
     env: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     gpus_requested: Mapped[int] = mapped_column(Integer, default=0)
+    requested_gpu_indices: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     gpu_indices: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default=JobStatus.queued.value, index=True)
     # 0..1 progress, reported by the job if it writes a progress file (optional).

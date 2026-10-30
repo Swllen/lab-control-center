@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 _ADDED_COLUMNS = {
     "servers": {"ssh_config_host": "VARCHAR(255)"},
-    "jobs": {"error": "TEXT"},
+    "jobs": {"error": "TEXT", "requested_gpu_indices": "JSON"},
 }
 
 

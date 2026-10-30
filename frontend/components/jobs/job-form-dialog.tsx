@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Layers, ListChecks, Minus, Plus } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ export interface JobFormInitial {
   command?: string;
   env?: Record<string, string>;
   gpus?: number;
+  requested_gpu_indices?: number[] | null;
 }
 
 const LAST_KEY = "lcc.jobs.last-spec";
@@ -84,6 +85,9 @@ export function JobFormDialog({
   const [command, setCommand] = useState("");
   const [envText, setEnvText] = useState("");
   const [gpus, setGpus] = useState(0);
+  const [gpuMode, setGpuMode] = useState<"auto" | "specific">("auto");
+  const [selectedGpus, setSelectedGpus] = useState<number[]>([]);
+  const capabilities = useQuery({ queryKey: ["scheduler", "gpu-selection"], queryFn: jobsApi.queueStatus, enabled: open, staleTime: 5000, refetchInterval: open ? 10_000 : false });
   const [paramsYaml, setParamsYaml] = useState(EXAMPLE_SWEEP);
   const [preview, setPreview] = useState<SweepPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -98,6 +102,8 @@ export function JobFormDialog({
     setCommand(initial?.command ?? "");
     setEnvText(envToText(base.env));
     setGpus(base.gpus ?? 0);
+    setGpuMode(base.requested_gpu_indices?.length ? "specific" : "auto");
+    setSelectedGpus(base.requested_gpu_indices ?? []);
     setPreview(null);
     setPreviewError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,7 +114,18 @@ export function JobFormDialog({
     () => summary?.find((m) => m.server_id === serverId)?.static?.gpus.length ?? 8,
     [summary, serverId],
   );
-  const spec: JobSpec | null = serverId ? { server_id: serverId, working_dir: workingDir.trim() || "~", command, env, gpus } : null;
+  const gpuOptions = summary?.find((m) => m.server_id === serverId)?.static?.gpus ?? [];
+  const supportsSelection = capabilities.data?.find(s => s.server_id === serverId)?.supports_gpu_selection;
+  const selectionError = gpuMode !== "specific" ? null : !supportsSelection
+    ? "Restart the updated backend to enable specific GPU selection."
+    : !gpuOptions.length ? "Waiting for GPU information from the server."
+    : !selectedGpus.length ? "Select at least one GPU."
+    : selectedGpus.some(index => !gpuOptions.some(g => g.index === index)) ? "A selected GPU is no longer available on this server. Select again." : null;
+  const spec: JobSpec | null = serverId ? {
+    server_id: serverId, working_dir: workingDir.trim() || "~", command, env,
+    gpus: gpuMode === "specific" ? selectedGpus.length : gpus,
+    requested_gpu_indices: gpuMode === "specific" ? selectedGpus : null,
+  } : null;
 
   // Live sweep preview (debounced).
   useEffect(() => {
@@ -130,14 +147,15 @@ export function JobFormDialog({
     }, 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, mode, paramsYaml, command, name, serverId, workingDir, gpus, envText]);
+  }, [open, mode, paramsYaml, command, name, serverId, workingDir, gpus, envText, gpuMode, selectedGpus]);
 
   const submit = useMutation({
     mutationFn: async (): Promise<Job[]> => {
       if (!spec) throw new Error("Pick a server");
       if (envError) throw new Error(envError);
+      if (selectionError) throw new Error(selectionError);
       try {
-        window.localStorage.setItem(LAST_KEY, JSON.stringify({ server_id: spec.server_id, working_dir: spec.working_dir, env, gpus }));
+        window.localStorage.setItem(LAST_KEY, JSON.stringify({ server_id: spec.server_id, working_dir: spec.working_dir, env, gpus: spec.gpus, requested_gpu_indices: spec.requested_gpu_indices }));
       } catch {
         /* ignore */
       }
@@ -182,11 +200,11 @@ export function JobFormDialog({
           <Field label={mode === "job" ? "Name" : "Sweep name (prefix)"} htmlFor="job-name" className="col-span-6 sm:col-span-3">
             <Input id="job-name" required autoFocus placeholder="finetune-llama" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="GPUs" htmlFor="job-gpus" className="col-span-6 sm:col-span-3" hint={gpus ? `CUDA_VISIBLE_DEVICES gets ${gpus} idle GPU${gpus > 1 ? "s" : ""}` : "CPU only (GPUs hidden)"}>
+          <Field label="GPUs" htmlFor="job-gpus" className="col-span-6 sm:col-span-3" hint={gpuMode === "specific" ? `${selectedGpus.length} GPU${selectedGpus.length === 1 ? "" : "s"} selected` : gpus ? `CUDA_VISIBLE_DEVICES gets ${gpus} idle GPU${gpus > 1 ? "s" : ""}` : "CPU only (GPUs hidden)"}>
             <div className="flex items-center gap-2">
-              <Button size="icon-sm" type="button" aria-label="Fewer GPUs" onClick={() => setGpus((g) => Math.max(0, g - 1))}><Minus /></Button>
-              <Input id="job-gpus" type="number" min={0} max={16} value={gpus} onChange={(e) => setGpus(Math.max(0, Math.min(16, Number(e.target.value) || 0)))} className="w-20 text-center" />
-              <Button size="icon-sm" type="button" aria-label="More GPUs" onClick={() => setGpus((g) => Math.min(gpuCount, g + 1))}><Plus /></Button>
+              <Button size="icon-sm" type="button" disabled={gpuMode === "specific"} aria-label="Fewer GPUs" onClick={() => setGpus((g) => Math.max(0, g - 1))}><Minus /></Button>
+              <Input id="job-gpus" type="number" disabled={gpuMode === "specific"} min={0} max={16} value={gpuMode === "specific" ? selectedGpus.length : gpus} onChange={(e) => setGpus(Math.max(0, Math.min(16, Number(e.target.value) || 0)))} className="w-20 text-center" />
+              <Button size="icon-sm" type="button" disabled={gpuMode === "specific"} aria-label="More GPUs" onClick={() => setGpus((g) => Math.min(gpuCount, g + 1))}><Plus /></Button>
               <span className="text-[12px] text-subtle">of {gpuCount}</span>
             </div>
           </Field>
@@ -197,7 +215,7 @@ export function JobFormDialog({
                 <button
                   key={s.id}
                   type="button"
-                  onClick={() => setServerId(s.id)}
+                  onClick={() => { if (serverId !== s.id) { setSelectedGpus([]); } setServerId(s.id); }}
                   className={cn("tile flex items-center gap-2 rounded-xl px-3.5 py-2 text-[13px] font-medium transition hover:bg-tile-hover", serverId === s.id && "ring-2 ring-primary")}
                 >
                   <StatusDot state={summary?.find((m) => m.server_id === s.id)?.status.state} />
@@ -205,6 +223,21 @@ export function JobFormDialog({
                 </button>
               ))}
             </div>
+          </div>
+          <div className="col-span-6 space-y-3">
+            <div className="flex gap-2" role="group" aria-label="GPU allocation">
+              <Button type="button" size="sm" variant={gpuMode === "auto" ? "primary" : "secondary"} aria-pressed={gpuMode === "auto"} onClick={() => setGpuMode("auto")}>Auto-assign</Button>
+              <Button type="button" size="sm" variant={gpuMode === "specific" ? "primary" : "secondary"} aria-pressed={gpuMode === "specific"} onClick={() => setGpuMode("specific")}>Select GPUs</Button>
+            </div>
+            {gpuMode === "specific" ? <>
+              <div className="flex flex-wrap gap-2">{gpuOptions.map(g => <button key={g.index} type="button" aria-pressed={selectedGpus.includes(g.index)} title={g.name}
+                onClick={() => setSelectedGpus(ids => ids.includes(g.index) ? ids.filter(id => id !== g.index) : [...ids, g.index].sort((a, b) => a - b))}
+                className={cn("tile rounded-xl px-4 py-2 text-sm transition", selectedGpus.includes(g.index) && "ring-2 ring-primary text-primary")}>
+                GPU {g.index}
+              </button>)}</div>
+              <p className="text-xs text-muted">Uses only the selected GPUs and waits until all are idle. GPU numbering inside your program starts at 0.</p>
+              {selectionError ? <p role="alert" className="text-xs text-danger">{selectionError}</p> : null}
+            </> : null}
           </div>
           <Field label="Working directory" htmlFor="job-wd" className="col-span-6">
             <Input id="job-wd" value={workingDir} onChange={(e) => setWorkingDir(e.target.value)} className="font-mono" spellCheck={false} />
@@ -257,7 +290,7 @@ export function JobFormDialog({
           ) : null}
           <DialogFooter className="col-span-6 mt-1">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" variant="primary" loading={submit.isPending} disabled={!spec || !!envError || (mode === "sweep" && !preview)}>
+            <Button type="submit" variant="primary" loading={submit.isPending} disabled={!spec || !!envError || !!selectionError || (mode === "sweep" && !preview)}>
               {mode === "job" ? "Queue job" : preview ? `Queue ${preview.count} jobs` : "Queue sweep"}
             </Button>
           </DialogFooter>

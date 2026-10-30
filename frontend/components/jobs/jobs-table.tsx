@@ -46,16 +46,24 @@ export function JobsTable({
   detailed = false,
   onOpen,
   onDuplicate,
+  selected,
+  onSelect,
+  selectionDisabled = false,
 }: {
   jobs: Job[] | undefined;
   loading?: boolean;
   detailed?: boolean;
   onOpen?: (job: Job) => void;
   onDuplicate?: (job: Job) => void;
+  selected?: Set<number>;
+  onSelect?: (ids: Set<number>) => void;
+  selectionDisabled?: boolean;
 }) {
   const servers = useServerMap();
   const qc = useQueryClient();
   const now = Date.now();
+  const eligible = (jobs ?? []).filter(job => ["completed", "failed", "canceled"].includes(job.status));
+  const selectedCount = eligible.filter(job => selected?.has(job.id)).length;
 
   const act = (fn: () => Promise<unknown>, done: string) =>
     fn().then(
@@ -82,6 +90,14 @@ export function JobsTable({
       <table className="w-full min-w-[640px] border-separate border-spacing-0 text-[13px]">
         <thead>
           <tr className="text-left text-[12.5px] text-muted [&_th]:border-b [&_th]:border-line [&_th]:px-3 [&_th]:pb-2.5 [&_th]:pt-1 [&_th]:font-medium">
+            {onSelect ? <th className="w-10">
+              <input type="checkbox" aria-label="Select all finished jobs shown"
+                checked={eligible.length > 0 && selectedCount === eligible.length}
+                ref={element => { if (element) element.indeterminate = selectedCount > 0 && selectedCount < eligible.length; }}
+                disabled={selectionDisabled || !eligible.length}
+                onChange={event => onSelect(event.target.checked ? new Set(eligible.map(job => job.id)) : new Set())}
+                className="size-4 align-middle accent-primary" />
+            </th> : null}
             <th className="w-14">#</th>
             <th>Name</th>
             <th>Server</th>
@@ -104,9 +120,21 @@ export function JobsTable({
                 className={cn(
                   "transition-colors hover:bg-tile-hover [&_td]:border-b [&_td]:border-line [&_td]:px-3 [&_td]:py-2.5 last:[&_td]:border-0",
                   onOpen && "cursor-pointer",
+                  selected?.has(job.id) && "bg-primary-soft",
                 )}
                 title={job.command}
               >
+                {onSelect ? <td onClick={event => event.stopPropagation()}>
+                  <input type="checkbox" aria-label={`Select ${job.name} (#${job.id})`}
+                    title={active ? "Cancel the job before deleting its record" : "Select record for deletion"}
+                    checked={selected?.has(job.id) ?? false} disabled={active || selectionDisabled}
+                    className="size-4 align-middle accent-primary"
+                    onChange={event => {
+                      const next = new Set(selected);
+                      if (event.target.checked) next.add(job.id); else next.delete(job.id);
+                      onSelect(next);
+                    }} />
+                </td> : null}
                 <td className="tabular text-muted">{job.id}</td>
                 <td className="max-w-[260px]">
                   <span className="block truncate font-medium">{job.name}</span>
@@ -138,7 +166,7 @@ export function JobsTable({
                 </td>
                 {detailed ? (
                   <td className="tabular text-fg/80">
-                    {job.gpus_requested ? `${job.gpus_requested}${job.gpu_indices ? ` [${job.gpu_indices.join(",")}]` : ""}` : "CPU"}
+                    {job.gpus_requested ? `${job.gpus_requested}${job.gpu_indices ? ` [${job.gpu_indices.join(",")}]` : job.requested_gpu_indices ? ` → [${job.requested_gpu_indices.join(",")}]` : ""}` : "CPU"}
                   </td>
                 ) : null}
                 <td className={cn("tabular text-fg/80", !job.started_at && "text-subtle")}>{job.started_at ? formatRelative(job.started_at, now) : "-"}</td>

@@ -12,6 +12,7 @@ import { authApi, queryKeys } from "@/lib/api";
 import { Kbd } from "@/components/ui/misc";
 import { NAV_ITEMS } from "@/components/layout/nav";
 import { AiSettings } from "@/components/settings/ai-settings";
+import { LanAddress } from "@/components/settings/lan-address";
 import { useMe } from "@/lib/hooks/queries";
 import { cn } from "@/lib/utils";
 
@@ -88,6 +89,7 @@ export default function SettingsPage() {
       </GlassCard>
 
       <AiSettings isAdmin={user?.role === "admin"} />
+      {user?.role === "admin" ? <LanAddress /> : null}
 
       <GlassCard className="pb-3 xl:col-span-2">
         <CardHeader title="Keyboard shortcuts" />

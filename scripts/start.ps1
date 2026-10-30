@@ -81,6 +81,34 @@ try {
     Write-Host "Frontend: $(if ($frontendRunning) { 'already running; will reuse' } else { 'ready to start' })"
     if ($CheckOnly) { Write-Host 'Check complete. No services were started or stopped.'; exit 0 }
 
+    if ($Lan) {
+        $lanIps = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.AddressState -eq 'Preferred' -and $_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)' } |
+            Select-Object -ExpandProperty IPAddress -Unique)
+        if (-not $lanIps.Count) { throw 'No LAN IPv4 address found. Connect to Ethernet or Wi-Fi first.' }
+        if (-not $backendRunning) {
+            Push-Location $backendDir
+            try {
+                $origins = @(& $pythonPath -c 'from app.config import get_settings; [print(origin) for origin in get_settings().allowed_origins]')
+                if ($LASTEXITCODE -ne 0) { throw 'Could not read backend origins.' }
+            } finally { Pop-Location }
+            $origins += @($lanIps | ForEach-Object { "http://${_}:3000" })
+            $env:LCC_ALLOWED_ORIGINS = ConvertTo-Json -Compress -InputObject ([string[]]@($origins | Select-Object -Unique))
+        }
+        if (-not $frontendRunning) {
+            Push-Location $frontendDir
+            try {
+                $devOrigins = @(& $nodePath -e "require('@next/env').loadEnvConfig(process.cwd(), true); (process.env.LCC_DEV_ORIGINS || '').split(',').filter(Boolean).forEach(value => console.log(value))")
+                if ($LASTEXITCODE -ne 0) { throw 'Could not read frontend origins.' }
+            } finally { Pop-Location }
+            $env:LCC_DEV_ORIGINS = (@($devOrigins) + $lanIps | Select-Object -Unique) -join ','
+        }
+        foreach ($lanIp in $lanIps) { Write-Host "LAN address: http://${lanIp}:3000" }
+        if ($backendRunning -or $frontendRunning) {
+            Write-Host 'Existing services are reused, not switched to LAN mode. If they were started locally, stop them before starting LAN mode.' -ForegroundColor Yellow
+        }
+    }
+
     New-Item -ItemType Directory -Path $runtimeLogs -Force | Out-Null
     if (-not $backendRunning) {
         # No auto-reload: saving backend code must not unexpectedly terminate terminal sessions.

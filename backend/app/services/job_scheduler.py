@@ -69,7 +69,8 @@ class Placement:
 
 
 def place(
-    queued: Sequence[Job], running_count: int, max_jobs: int, free: list[int], gpu_count: int
+    queued: Sequence[Job], running_count: int, max_jobs: int, free: list[int], gpu_count: int,
+    gpu_ids: Sequence[int] | None = None,
 ) -> tuple[list[Placement], dict[int, str]]:
     """FIFO with backfill: earlier jobs get first pick; a job that does not fit does not block
     smaller ones behind it. Returns placements and a wait reason for every job left queued."""
@@ -77,11 +78,30 @@ def place(
     reasons: dict[int, str] = {}
     available = list(free)
     slots = max_jobs - running_count
+    inventory = set(gpu_ids if gpu_ids is not None else range(gpu_count))
     for job in queued:
         if slots <= 0:
             reasons[job.id] = f"Server at max concurrent jobs ({max_jobs})"
             continue
         need = job.gpus_requested
+        requested = job.requested_gpu_indices
+        if requested is not None:
+            if not requested or len(requested) != need or len(set(requested)) != need:
+                reasons[job.id] = "Invalid GPU selection; recreate the job"
+                continue
+            missing = set(requested) - inventory
+            if missing:
+                reasons[job.id] = f"Selected GPUs not found: {sorted(missing)}"
+                continue
+            busy = [i for i in requested if i not in available]
+            if busy:
+                reasons[job.id] = f"Waiting for selected GPUs {requested} (busy: {busy})"
+                continue
+            chosen = list(requested)
+            available = [i for i in available if i not in requested]
+            placements.append(Placement(job.id, chosen))
+            slots -= 1
+            continue
         if need > gpu_count:
             reasons[job.id] = f"Requests {need} GPUs but server has {gpu_count}"
             continue
@@ -251,7 +271,7 @@ class LocalGpuScheduler:
         reserved = {i for j in running for i in (j.gpu_indices or [])}
         settings = get_settings()
         free = free_gpus(snapshot, reserved, settings.gpu_free_max_mem_frac, settings.gpu_free_max_util)
-        placements, waiting = place(queued, len(running), server.max_jobs, free, len(snapshot.gpus))  # type: ignore[union-attr]
+        placements, waiting = place(queued, len(running), server.max_jobs, free, len(snapshot.gpus), [g.index for g in snapshot.gpus])  # type: ignore[union-attr]
         reasons.update(waiting)
         by_id = {j.id: j for j in queued}
         for p in placements:

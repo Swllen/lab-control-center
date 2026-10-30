@@ -156,7 +156,7 @@ export function JobDetailDialog({
               <dl className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">
                 <Fact label="Server">{servers.get(job.server_id)?.name}</Fact>
                 <Fact label="GPUs">
-                  {job.gpus_requested === 0 ? "CPU only" : `${job.gpus_requested}${job.gpu_indices ? ` → [${job.gpu_indices.join(", ")}]` : " requested"}`}
+                  {job.gpus_requested === 0 ? "CPU only" : `${job.gpus_requested}${job.requested_gpu_indices ? ` selected [${job.requested_gpu_indices.join(", ")}]` : " requested"}${job.gpu_indices ? ` → [${job.gpu_indices.join(", ")}]` : ""}`}
                 </Fact>
                 <Fact label="Started">{job.started_at ? formatRelative(job.started_at, now) : "—"}</Fact>
                 <Fact label="Duration">{duration != null ? formatDuration(duration) : "—"}</Fact>

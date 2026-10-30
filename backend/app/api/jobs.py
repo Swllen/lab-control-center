@@ -61,6 +61,17 @@ async def _check_server(db: DbSession, server_id: int) -> Server:
     return server
 
 
+def _check_gpu_selection(request: Request, server_id: int, indices: list[int] | None) -> None:
+    if indices is None:
+        return
+    runtime = request.app.state.hub.get(server_id)
+    inventory = runtime.static.gpus if runtime and runtime.static else None
+    if inventory is not None:
+        invalid = set(indices) - {g.index for g in inventory}
+        if invalid:
+            raise HTTPException(422, f"GPU indices not found on this server: {sorted(invalid)}")
+
+
 # ---------------------------------------------------------------- jobs
 
 
@@ -88,9 +99,10 @@ async def list_jobs(
 @router.post("/api/jobs", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(body: JobCreate, request: Request, _: OperatorUser, db: DbSession) -> JobOut:
     await _check_server(db, body.server_id)
+    _check_gpu_selection(request, body.server_id, body.requested_gpu_indices)
     job = Job(
         name=body.name, server_id=body.server_id, working_dir=body.working_dir, command=body.command,
-        env=body.env, gpus_requested=body.gpus, status="queued",
+        env=body.env, gpus_requested=body.gpus, requested_gpu_indices=body.requested_gpu_indices, status="queued",
     )
     db.add(job)
     await db.commit()
@@ -134,7 +146,8 @@ async def duplicate_job(job_id: int, request: Request, _: OperatorUser, db: DbSe
     src = await _job_or_404(db, job_id)
     job = Job(
         name=f"{src.name}-copy"[:128], server_id=src.server_id, working_dir=src.working_dir, command=src.command,
-        env=dict(src.env), params=dict(src.params), gpus_requested=src.gpus_requested, status="queued",
+        env=dict(src.env), params=dict(src.params), gpus_requested=src.gpus_requested,
+        requested_gpu_indices=src.requested_gpu_indices, status="queued",
     )
     db.add(job)
     await db.commit()
@@ -209,11 +222,12 @@ async def preview_sweep(body: SweepCreate, _: CurrentUser) -> SweepPreview:
 @router.post("/api/sweeps", response_model=list[JobOut], status_code=status.HTTP_201_CREATED)
 async def create_sweep(body: SweepCreate, request: Request, _: OperatorUser, db: DbSession) -> list[JobOut]:
     await _check_server(db, body.server_id)
+    _check_gpu_selection(request, body.server_id, body.requested_gpu_indices)
     params, expanded = _expand(body)
     sweep = Sweep(
         name=body.name,
         template={"command": body.command, "working_dir": body.working_dir, "env": body.env,
-                  "gpus": body.gpus, "server_id": body.server_id},
+                  "gpus": body.gpus, "requested_gpu_indices": body.requested_gpu_indices, "server_id": body.server_id},
         parameters=params,
     )
     db.add(sweep)
@@ -221,7 +235,8 @@ async def create_sweep(body: SweepCreate, request: Request, _: OperatorUser, db:
     jobs = [
         Job(
             name=name, server_id=body.server_id, sweep_id=sweep.id, working_dir=body.working_dir,
-            command=command, env=dict(body.env), params=point, gpus_requested=body.gpus, status="queued",
+            command=command, env=dict(body.env), params=point, gpus_requested=body.gpus,
+            requested_gpu_indices=body.requested_gpu_indices, status="queued",
         )
         for name, command, point in expanded
     ]

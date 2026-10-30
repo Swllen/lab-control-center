@@ -172,6 +172,7 @@ export interface Job {
   env: Record<string, string>;
   params: Record<string, unknown>;
   gpus_requested: number;
+  requested_gpu_indices: number[] | null;
   gpu_indices: number[] | null;
   status: JobStatus;
   progress: number | null;
@@ -192,6 +193,7 @@ export interface JobSpec {
   command: string;
   env: Record<string, string>;
   gpus: number;
+  requested_gpu_indices?: number[] | null;
 }
 
 export interface SweepPreview {
@@ -211,6 +213,7 @@ export interface LogTail {
 }
 
 export interface ServerQueueStatus {
+  supports_gpu_selection?: boolean;
   server_id: number;
   max_jobs: number;
   running: number;

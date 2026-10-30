@@ -19,7 +19,7 @@ import type {
   Transfer,
   User,
 } from "@/lib/types";
-import { api, backendUrl } from "./client";
+import { api, ApiError, backendUrl } from "./client";
 
 export { ApiError, backendUrl, wsUrl } from "./client";
 
@@ -96,6 +96,23 @@ export const jobsApi = {
   retry: (id: number) => api<Job>(`/api/jobs/${id}/retry`, { method: "POST" }),
   duplicate: (id: number) => api<Job>(`/api/jobs/${id}/duplicate`, { method: "POST" }),
   remove: (id: number) => api<void>(`/api/jobs/${id}`, { method: "DELETE" }),
+  removeMany: async (ids: number[]) => {
+    const deleted: number[] = [];
+    const failed: { id: number; message: string }[] = [];
+    const unique = [...new Set(ids)];
+    // Reuse the existing endpoint, including its active-job guard. Bound concurrent
+    // requests, and report partial failures instead of hiding undeleted records.
+    for (let offset = 0; offset < unique.length; offset += 4) {
+      const chunk = unique.slice(offset, offset + 4);
+      const results = await Promise.allSettled(chunk.map(id => api<void>(`/api/jobs/${id}`, { method: "DELETE" })));
+      results.forEach((result, index) => {
+        const id = chunk[index]!;
+        if (result.status === "fulfilled" || (result.reason instanceof ApiError && result.reason.status === 404)) deleted.push(id);
+        else failed.push({ id, message: result.reason instanceof Error ? result.reason.message : "Could not delete job" });
+      });
+    }
+    return { deleted, failed };
+  },
   logs: (id: number, stream: "stdout" | "stderr", tailBytes = 65536) =>
     api<LogTail>(`/api/jobs/${id}/logs?stream=${stream}&tail_bytes=${tailBytes}`),
   queueStatus: () => api<ServerQueueStatus[]>("/api/scheduler/status"),
