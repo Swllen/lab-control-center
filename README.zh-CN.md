@@ -5,6 +5,10 @@
 
 [English](README.md) · [任务说明](docs/JOBS.md) · [配额配置](docs/QUOTAS.md) · [安全说明](SECURITY.md)
 
+侧栏 **Workspace**（快捷键 `G W`）默认并排显示 Files 和 Terminals，可添加最多四个独立工具窗口，
+支持同一工具多开、横向/纵向/网格排列、最大化和关闭。调整布局时其他窗口继续运行，窗口组合自动保存。
+各终端窗口独立保存会话，不会与单独的 Terminals 页面互相覆盖。
+
 ## 安装和启动
 
 控制台主机需要 Python 3.12+、uv、Node.js 20.9+ 和 npm。远程服务器需要 SSH

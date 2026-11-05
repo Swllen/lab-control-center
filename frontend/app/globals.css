@@ -2,6 +2,12 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Embedded tools fill their window rather than reserving space for the app header. */
+.embedded-shell[data-compact="true"] > div:first-child {
+  height: calc(100dvh - 24px);
+  min-height: 400px;
+}
+
 /* ------------------------------------------------------------------ tokens */
 
 :root {

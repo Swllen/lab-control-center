@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
 import { useMe } from "@/lib/hooks/queries";
@@ -18,9 +18,15 @@ function isTypingTarget(el: EventTarget | null): boolean {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const [embedded, setEmbedded] = useState<boolean | null>(null);
   const { data: user, error, isLoading, isFetching, refetch } = useMe();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const chord = useRef<number>(0);
+
+  useEffect(() => {
+    setEmbedded(window.parent !== window && window.name.startsWith("lcc-window:"));
+  }, []);
 
   useEffect(() => {
     setUnauthorizedHandler(() => router.replace("/login"));
@@ -67,11 +73,23 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
-  if (isLoading || !user) {
+  if (isLoading || !user || embedded === null) {
     return (
       <div className="grid min-h-screen place-items-center">
         <div className="size-8 animate-spin rounded-full border-2 border-primary/25 border-t-primary" />
       </div>
+    );
+  }
+
+  if (embedded) {
+    return (
+      <main className="embedded-shell p-3" data-compact={pathname === "/files" || pathname === "/terminals"}>
+        {pathname === "/workspace" ? (
+          <a href="/workspace" target="_top" className="text-primary underline">Open Workspace</a>
+        ) : children}
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <UploadPanel />
+      </main>
     );
   }
 

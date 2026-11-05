@@ -55,6 +55,14 @@ export interface Workspace {
 
 const STORAGE_KEY = "lcc.terminal-workspace.v1";
 
+// Each workspace window owns its sessions, including after navigation or reload.
+// Sharing the standalone key would attach multiple sockets to the same shell.
+function storageKey(): string {
+  return window.parent !== window && window.name.startsWith("lcc-window:")
+    ? `${STORAGE_KEY}.${window.name}`
+    : STORAGE_KEY;
+}
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 function newTab(index: number): TabState {
@@ -73,7 +81,7 @@ function isWorkspace(v: unknown): v is Workspace {
 
 function load(): Workspace {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey());
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (isWorkspace(parsed)) {
       if (!parsed.tabs.some((t) => t.id === parsed.activeTabId)) parsed.activeTabId = parsed.tabs[0]!.id;
@@ -99,7 +107,7 @@ function current(): Workspace {
 function commit(next: Workspace): void {
   state = next;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    window.localStorage.setItem(storageKey(), JSON.stringify(next));
   } catch {
     /* quota / private mode: keep in memory */
   }

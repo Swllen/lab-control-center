@@ -97,7 +97,7 @@ function TerminalsWorkspace() {
 
   return (
     <div className="flex h-[calc(100vh-150px)] min-h-[520px] flex-col gap-3">
-      <div className="glass flex items-center gap-3 rounded-2xl p-1.5 shadow-none">
+      <div className="glass flex flex-wrap items-center gap-3 rounded-2xl p-1.5 shadow-none">
         <TabStrip
           ws={ws}
           onActivate={workspace.activateTab}

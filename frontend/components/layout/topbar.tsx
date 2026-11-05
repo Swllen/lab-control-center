@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, CircleCheck, LogOut, Moon, Search, Settings, Sun, TriangleAlert } from "lucide-react";
+import { Bell, CircleCheck, LogOut, Moon, PanelsTopLeft, Search, Settings, Sun, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -32,6 +32,11 @@ export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
         <p className="mt-1 text-[14.5px] text-muted">{nav.subtitle}</p>
       </div>
       <div className="flex items-center gap-3">
+        {pathname !== "/workspace" ? (
+          <Link href="/workspace" title="Open tools side by side" aria-label="Open workspace" className="glass grid size-11 shrink-0 place-items-center rounded-2xl text-muted hover:text-primary">
+            <PanelsTopLeft className="size-[19px]" />
+          </Link>
+        ) : null}
         <button
           type="button"
           onClick={onOpenPalette}
