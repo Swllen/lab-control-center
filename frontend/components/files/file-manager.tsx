@@ -220,9 +220,9 @@ export function FileManager({
   const totalSize = entries.reduce((s, e) => s + (isDirLike(e) ? 0 : e.size), 0);
 
   return (
-    <div className="grid h-[calc(100vh-150px)] min-h-[520px] grid-cols-1 gap-5 lg:grid-cols-[270px_1fr] 3xl:grid-cols-[320px_1fr]">
+    <div className="grid h-[calc(100vh-150px)] min-h-[520px] grid-cols-1 gap-5 @[1024px]:grid-cols-[270px_1fr] @[1800px]:grid-cols-[320px_1fr]">
       {/* Left: servers + tree */}
-      <GlassCard className="hidden min-h-0 flex-col p-3 lg:flex">
+      <GlassCard className="hidden min-h-0 flex-col p-3 @[1024px]:flex">
         <ServerPicker servers={servers} value={serverId} onChange={(id) => onNavigate(id, "~")} />
         <div className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
           <DirTree serverId={serverId} currentPath={current} home={home} showHidden={showHidden} onNavigate={go} />
@@ -238,7 +238,7 @@ export function FileManager({
         onDrop={onDrop}
       >
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
-          <div className="w-full lg:hidden">
+          <div className="w-full @[1024px]:hidden">
             <ServerPicker servers={servers} value={serverId} onChange={(id) => onNavigate(id, "~")} />
           </div>
           <Button

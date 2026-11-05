@@ -9,6 +9,7 @@ import { useMetricsSummary } from "@/lib/hooks/queries";
 import { diskTotals } from "@/lib/metrics-derive";
 import { cn, sum } from "@/lib/utils";
 import { NAV_ITEMS } from "./nav";
+import { TOOL_DRAG_TYPE } from "./dock-layout";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -33,6 +34,12 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              draggable
+              title={`Drag ${item.label} into the page to open side by side`}
+              onDragStart={(event) => {
+                event.dataTransfer.setData(TOOL_DRAG_TYPE, item.href);
+                event.dataTransfer.effectAllowed = "copyMove";
+              }}
               aria-current={active ? "page" : undefined}
               className={cn(
                 "group relative flex h-11 items-center gap-3.5 rounded-xl px-3.5 text-[14.5px] transition-colors duration-150",
@@ -48,6 +55,8 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      <p className="mt-3 px-2 text-[11px] leading-relaxed text-subtle">Drag a tool into the page to open it side by side.</p>
 
       <LabStorage />
     </aside>

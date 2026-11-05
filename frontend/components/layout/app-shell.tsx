@@ -8,6 +8,7 @@ import { setUnauthorizedHandler } from "@/lib/metrics-store";
 import { UploadPanel } from "@/components/files/upload-panel";
 import { Button } from "@/components/ui/button";
 import { CommandPalette } from "./command-palette";
+import { DockLayout, TOOL_DRAG_TYPE } from "./dock-layout";
 import { NAV_ITEMS } from "./nav";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
@@ -22,6 +23,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [embedded, setEmbedded] = useState<boolean | null>(null);
   const { data: user, error, isLoading, isFetching, refetch } = useMe();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [draggingTool, setDraggingTool] = useState(false);
   const chord = useRef<number>(0);
 
   useEffect(() => {
@@ -83,10 +85,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   if (embedded) {
     return (
-      <main className="embedded-shell p-3" data-compact={pathname === "/files" || pathname === "/terminals"}>
-        {pathname === "/workspace" ? (
-          <a href="/workspace" target="_top" className="text-primary underline">Open Workspace</a>
-        ) : children}
+      <main className="embedded-shell @container p-3" data-compact={pathname === "/files" || pathname === "/terminals"}>
+        {children}
         <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
         <UploadPanel />
       </main>
@@ -94,11 +94,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-[3200px] gap-6 p-5">
+    <div className="mx-auto flex min-h-screen max-w-[3200px] gap-6 p-5"
+      onDragStart={(event) => { if (event.dataTransfer.types.includes(TOOL_DRAG_TYPE)) setDraggingTool(true); }}
+      onDragEnd={() => setDraggingTool(false)}>
       <Sidebar />
       <main className="min-w-0 flex-1 pb-6">
         <Topbar onOpenPalette={() => setPaletteOpen(true)} />
-        {children}
+        <DockLayout dragging={draggingTool} onDragFinished={() => setDraggingTool(false)}>{children}</DockLayout>
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <UploadPanel />

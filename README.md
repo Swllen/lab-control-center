@@ -13,7 +13,7 @@ The backend connects over SSH; no persistent management agent is installed remot
 |---|---|
 | Monitoring | CPU/RAM, per-GPU utilization/VRAM/temperature, disks, network and history |
 | Terminals | Tabs, split panes, optional tmux, reattach and tmux history |
-| Workspace | Up to four independent tool windows, side-by-side/stacked/grid layouts, maximize and saved arrangement |
+| Split view | Drag sidebar tools onto the left/right of the current page to dock up to four independent panes; drag pane headers to reorder |
 | Files | SFTP operations, uploads/downloads, previews of text/code, JSON/JSONL, Markdown, CSV and images |
 | Transfers | Streaming and server-to-server transfers, progress, cancel/retry |
 | Jobs | Wait for idle GPUs, auto-assign or select specific GPUs, YAML sweeps, logs, cancel/retry/duplicate |
