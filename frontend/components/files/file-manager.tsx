@@ -78,6 +78,24 @@ export function FileManager({
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
+  const managerRef = useRef<HTMLDivElement>(null);
+  const [managerLayout, setManagerLayout] = useState<"compact" | "wide" | "large">("compact");
+  const wide = managerLayout !== "compact";
+
+  // Use one width decision for the tree, grid and picker. Each docked instance
+  // measures itself, so nested containers cannot put them in conflicting modes.
+  useEffect(() => {
+    const manager = managerRef.current;
+    if (!manager) return;
+    const updateLayout = () => {
+      const width = manager.clientWidth;
+      setManagerLayout(width >= 1800 ? "large" : width >= 1024 ? "wide" : "compact");
+    };
+    updateLayout();
+    const observer = new ResizeObserver(updateLayout);
+    observer.observe(manager);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => setShowHidden(readShowHidden()), []);
   useEffect(() => {
@@ -220,9 +238,9 @@ export function FileManager({
   const totalSize = entries.reduce((s, e) => s + (isDirLike(e) ? 0 : e.size), 0);
 
   return (
-    <div className="grid h-[calc(100vh-150px)] min-h-[520px] grid-cols-1 gap-5 @[1024px]:grid-cols-[270px_1fr] @[1800px]:grid-cols-[320px_1fr]">
+    <div ref={managerRef} className={cn("grid h-[calc(100vh-150px)] min-h-[520px] gap-5", managerLayout === "large" ? "grid-cols-[320px_minmax(0,1fr)]" : wide ? "grid-cols-[270px_minmax(0,1fr)]" : "grid-cols-1")}>
       {/* Left: servers + tree */}
-      <GlassCard className="hidden min-h-0 flex-col p-3 @[1024px]:flex">
+      <GlassCard className={cn("min-h-0 flex-col p-3", wide ? "flex" : "hidden")}>
         <ServerPicker servers={servers} value={serverId} onChange={(id) => onNavigate(id, "~")} />
         <div className="mt-3 min-h-0 flex-1 overflow-auto pr-1">
           <DirTree serverId={serverId} currentPath={current} home={home} showHidden={showHidden} onNavigate={go} />
@@ -238,7 +256,7 @@ export function FileManager({
         onDrop={onDrop}
       >
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
-          <div className="w-full @[1024px]:hidden">
+          <div className={cn("w-full", wide && "hidden")}>
             <ServerPicker servers={servers} value={serverId} onChange={(id) => onNavigate(id, "~")} />
           </div>
           <Button
